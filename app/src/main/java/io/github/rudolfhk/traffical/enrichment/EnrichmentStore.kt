@@ -22,6 +22,10 @@ object EnrichmentStore {
     val enrichment: StateFlow<Enrichment?> = _enrichment.asStateFlow()
     private val started = AtomicBoolean()
 
+    /** Why a part of the data could not be loaded (shown in the settings). */
+    val errors: StateFlow<List<String>> get() = _errors
+    private val _errors = MutableStateFlow<List<String>>(emptyList())
+
     val current: Enrichment? get() = _enrichment.value
 
     fun load(context: Context) {
@@ -36,8 +40,10 @@ object EnrichmentStore {
 
     private fun <T> read(what: String, block: () -> T): T? = try {
         block()
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
+        // Also OutOfMemoryError: the app works without the data.
         Log.e(TAG, "$what unavailable", e)
+        _errors.value = _errors.value + "$what: $e"
         null
     }
 }

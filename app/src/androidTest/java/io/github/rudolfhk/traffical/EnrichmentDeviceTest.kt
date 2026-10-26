@@ -22,6 +22,8 @@ class EnrichmentDeviceTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         EnrichmentStore.load(context)
         val enrichment = runBlocking { withTimeout(60_000) { EnrichmentStore.enrichment.first { it != null } } }!!
+        assertNotNull("IP database: ${EnrichmentStore.errors.value}", enrichment.ips)
+        assertNotNull("tracker list: ${EnrichmentStore.errors.value}", enrichment.trackers)
         val google = enrichment.destination(InetAddress.getByName("8.8.8.8"), "googleads.g.doubleclick.net")
         assertEquals(15169, google.network?.asn)
         assertEquals("US", google.country)
