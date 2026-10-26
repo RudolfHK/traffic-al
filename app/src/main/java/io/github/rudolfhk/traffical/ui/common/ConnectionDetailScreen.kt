@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
@@ -14,11 +15,13 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -29,7 +32,9 @@ import io.github.rudolfhk.traffical.core.analysis.flags
 import io.github.rudolfhk.traffical.core.analysis.protocolLabel
 import io.github.rudolfhk.traffical.core.capture.Direction
 import io.github.rudolfhk.traffical.core.packet.TcpFlags
+import io.github.rudolfhk.traffical.core.enrichment.countryName
 import io.github.rudolfhk.traffical.model.Connection
+import io.github.rudolfhk.traffical.model.OwnerInfo
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -43,14 +48,25 @@ private const val DUMP_WIDTH = 8
 /** Lines of hex dump shown per packet before it is expanded. */
 private const val COLLAPSED_DUMP_LINES = 6
 
+/** The online owner lookup of the detail screen. */
+data class OwnerState(val loading: Boolean = false, val info: OwnerInfo? = null)
+
 /**
  * Everything known about one connection and its packets from the capture buffer, with a
  * hex dump of each payload. [packets] is null while they are being loaded.
+ * [onLookupOwner] asks registries and DNS online who owns the server's address.
  */
 @Composable
-fun ConnectionDetailScreen(connection: Connection, packets: List<FlowPacket>?, modifier: Modifier = Modifier) {
+fun ConnectionDetailScreen(
+    connection: Connection,
+    packets: List<FlowPacket>?,
+    owner: OwnerState,
+    onLookupOwner: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val text = LocalUiText.current
     val flow = connection.flow
+    val destination = connection.destination
     val durationMicros = flow.lastSeenMicros - flow.firstSeenMicros
     val rate = if (durationMicros > 0) (flow.bytesOut + flow.bytesIn) * 1_000_000 / durationMicros else 0L
     val encrypted = flow.protocolLabel == "TLS" || flow.protocolLabel == "QUIC"
@@ -65,6 +81,9 @@ fun ConnectionDetailScreen(connection: Connection, packets: List<FlowPacket>?, m
         flow.category?.let { text.detailCategory to it },
         flow.breed?.let { text.detailRating to it },
         text.detailRemote to endpoint(flow.remoteAddress.hostAddress.orEmpty(), flow.remotePort),
+        destination?.country?.let { text.detailCountry to "${countryName(it)} ($it)" },
+        destination?.network?.let { text.detailNetwork to "${it.organization} · AS${it.asn}" },
+        destination?.tracker?.let { text.detailTracker to "${it.name} · ${it.company} · ${it.categoryLabel}" },
         text.detailLocal to endpoint(flow.localAddress.hostAddress.orEmpty(), flow.localPort),
         text.detailStarted to dateTimeFormat.format(Instant.ofEpochMilli(flow.firstSeenMicros / 1000)),
         text.detailDuration to Format.duration(durationMicros),
@@ -82,26 +101,11 @@ fun ConnectionDetailScreen(connection: Connection, packets: List<FlowPacket>?, m
                     style = MaterialTheme.typography.titleLarge,
                     fontFamily = FontFamily.Monospace,
                 )
-                FlagBadges(flow.flags(), Modifier.padding(top = 4.dp))
+                FlagBadges(flow.flags(destination?.tracker), Modifier.padding(top = 4.dp))
             }
         }
-        item {
-            Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    for ((label, value) in rows) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.weight(0.35f),
-                            )
-                            Text(value, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(0.65f))
-                        }
-                    }
-                }
-            }
-        }
+        item { InfoCard(rows) }
+        item { OwnerCard(owner, onLookupOwner) }
         item {
             Text(
                 text = "${text.detailPackets} (${packets?.size ?: "…"})",
@@ -127,6 +131,64 @@ fun ConnectionDetailScreen(connection: Connection, packets: List<FlowPacket>?, m
                 )
             }
             else -> items(packets) { packet -> PacketCard(packet) }
+        }
+    }
+}
+
+@Composable
+private fun InfoCard(rows: List<Pair<String, String>>, modifier: Modifier = Modifier.padding(horizontal = 16.dp)) {
+    Card(modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            for ((label, value) in rows) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(0.35f),
+                    )
+                    Text(value, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(0.65f))
+                }
+            }
+        }
+    }
+}
+
+/** Who owns the server's address, looked up online only on request. */
+@Composable
+private fun OwnerCard(owner: OwnerState, onLookup: () -> Unit) {
+    val text = LocalUiText.current
+    val info = owner.info
+    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(text.detailOwner, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            when {
+                owner.loading -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                info == null -> TextButton(onClick = onLookup) { Text(text.ownerLookup) }
+            }
+        }
+        if (info == null) {
+            Text(
+                text = text.ownerHint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            val rdap = info.rdap
+            InfoCard(
+                rows = listOfNotNull(
+                    text.ownerReverseDns to (info.reverseDns ?: text.ownerNone),
+                    rdap?.organization?.let { text.ownerOrganization to it },
+                    rdap?.name?.let { name -> text.ownerNetwork to listOfNotNull(name, rdap.handle?.takeUnless { it == name }).joinToString(" · ") },
+                    rdap?.range?.let { text.ownerRange to it },
+                    rdap?.country?.let { text.detailCountry to "${countryName(it)} ($it)" },
+                    rdap?.registry?.let { text.ownerRegistry to it },
+                ),
+                modifier = Modifier,
+            )
+            info.error?.let {
+                Text(text.ownerFailed.format(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
         }
     }
 }

@@ -17,6 +17,7 @@ import io.github.rudolfhk.traffical.core.capture.FlowTracker
 import io.github.rudolfhk.traffical.core.dns.DnsType
 import io.github.rudolfhk.traffical.core.pcap.PcapngWriter
 import io.github.rudolfhk.traffical.core.recording.ExportResult
+import io.github.rudolfhk.traffical.enrichment.EnrichmentStore
 import io.github.rudolfhk.traffical.history.History
 import io.github.rudolfhk.traffical.history.HistoryStore
 import io.github.rudolfhk.traffical.history.StoredLookup
@@ -128,6 +129,12 @@ object CaptureRepository {
                 if (subscribers > 0 && connectionsStale) synchronized(lock) { publishConnections() }
             }
         }
+        // Once the offline data is loaded, the connections get their destinations.
+        scope.launch {
+            EnrichmentStore.enrichment.collect { loaded ->
+                if (loaded != null) synchronized(lock) { if (_connections.subscriptionCount.value > 0) publishConnections() else connectionsStale = true }
+            }
+        }
         scope.launch {
             SettingsStore.settings.collectLatest {
                 delay(SETTINGS_DEBOUNCE_MILLIS) // e.g. while the UDP host is being typed
@@ -202,7 +209,10 @@ object CaptureRepository {
     /** Totals, throughput and per-app ranking over [range]. Cheap enough to call every second. */
     fun dashboard(range: TimeRange): DashboardData {
         val now = referenceMicros()
-        return synchronized(lock) { buildDashboard(tracker.snapshot(MAX_CONNECTIONS_SHOWN), timeline, range, now) }
+        val enrichment = EnrichmentStore.current
+        return synchronized(lock) {
+            buildDashboard(tracker.snapshot(MAX_CONNECTIONS_SHOWN), timeline, range, now) { enrichment?.destination(it) }
+        }
     }
 
     fun appInfo(uid: Int): AppInfo = apps.appInfo(uid)
@@ -298,7 +308,8 @@ object CaptureRepository {
                 .sortedByDescending { it.lastSeenMicros }
                 .take(MAX_CONNECTIONS_SHOWN)
         }
-        _connections.value = flows.map { Connection(it, apps.appInfo(it.uid)) }
+        val enrichment = EnrichmentStore.current
+        _connections.value = flows.map { Connection(it, apps.appInfo(it.uid), enrichment?.destination(it)) }
         connectionsStale = false
     }
 

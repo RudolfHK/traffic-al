@@ -26,7 +26,12 @@ import io.github.rudolfhk.traffical.core.capture.Direction
 import io.github.rudolfhk.traffical.core.capture.FlowInfo
 import io.github.rudolfhk.traffical.core.packet.IpProtocol
 import io.github.rudolfhk.traffical.core.packet.TcpFlags
+import io.github.rudolfhk.traffical.core.enrichment.Enrichment
+import io.github.rudolfhk.traffical.core.enrichment.IpDatabase
+import io.github.rudolfhk.traffical.core.enrichment.RdapInfo
+import io.github.rudolfhk.traffical.core.enrichment.TrackerList
 import io.github.rudolfhk.traffical.model.AppInfo
+import io.github.rudolfhk.traffical.model.OwnerInfo
 import io.github.rudolfhk.traffical.model.AppSettings
 import io.github.rudolfhk.traffical.model.BackgroundInfo
 import io.github.rudolfhk.traffical.model.PrivacyInfo
@@ -41,6 +46,7 @@ import io.github.rudolfhk.traffical.ui.common.DnsScreen
 import io.github.rudolfhk.traffical.ui.common.LocalUiText
 import io.github.rudolfhk.traffical.ui.common.LockScreen
 import io.github.rudolfhk.traffical.ui.common.LockScreenState
+import io.github.rudolfhk.traffical.ui.common.OwnerState
 import io.github.rudolfhk.traffical.ui.common.RecordingsScreen
 import io.github.rudolfhk.traffical.ui.common.SettingsScreen
 import io.github.rudolfhk.traffical.ui.common.Tab
@@ -50,15 +56,16 @@ import io.github.rudolfhk.traffical.ui.common.trafficAlColorScheme
 import org.jetbrains.skia.EncodedImageFormat
 import java.io.File
 import java.net.InetAddress
+import java.util.zip.GZIPInputStream
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.random.Random
 import kotlin.reflect.full.primaryConstructor
 
-/** Usage: Preview <out dir> <values/strings.xml> */
+/** Usage: Preview <out dir> <values/strings.xml> <assets/enrichment dir> */
 fun main(args: Array<String>) {
     val outDir = File(args[0]).apply { mkdirs() }
     val text = loadUiText(File(args[1]))
-    val sample = Sample()
+    val sample = Sample(File(args[2]))
 
     fun render(name: String, dark: Boolean = false, height: Int = 892, content: @Composable () -> Unit) {
         val scene = ImageComposeScene(width = 412 * 2, height = height * 2, density = Density(2f)) {
@@ -82,6 +89,7 @@ fun main(args: Array<String>) {
                     appInfo = sample::app,
                     onRangeChange = {},
                     onAppClick = {},
+                    onTrackerClick = {},
                     header = { SampleStatusCard() },
                     modifier = Modifier.padding(padding),
                 )
@@ -108,7 +116,13 @@ fun main(args: Array<String>) {
     for (dark in listOf(false, true)) {
         render(if (dark) "connection-detail-dark" else "connection-detail", dark) {
             TrafficAlScaffold(Tab.CONNECTIONS, {}, sample.tracker.app.label, onBack = {}) { padding ->
-                ConnectionDetailScreen(sample.tracker, sample.trackerPackets, Modifier.padding(padding))
+                ConnectionDetailScreen(
+                    connection = sample.tracker,
+                    packets = sample.trackerPackets,
+                    owner = OwnerState(info = sample.owner),
+                    onLookupOwner = {},
+                    modifier = Modifier.padding(padding),
+                )
             }
         }
         // Tall enough to show every setting.
@@ -192,7 +206,7 @@ private fun SampleStatusCard() {
 }
 
 /** Realistic sample data, pushed through the same core code the app uses. */
-private class Sample {
+private class Sample(private val assets: File) {
     companion object {
         const val CHROME = 10101
         const val YOUTUBE = 10102
@@ -266,7 +280,20 @@ private class Sample {
             bytesOut = 74, bytesIn = 120, ageSeconds = 26, durationSeconds = 0),
     )
 
-    val connections: List<Connection> = flows.sortedByDescending { it.lastSeenMicros }.map { Connection(it, app(it.uid)) }
+    /** The app's bundled offline data, read from the repository. */
+    private val enrichment = Enrichment(
+        GZIPInputStream(File(assets, "ip.bin.gz").inputStream()).use(IpDatabase::read),
+        GZIPInputStream(File(assets, "trackers.tsv.gz").inputStream()).use(TrackerList::read),
+    )
+
+    val connections: List<Connection> = flows.sortedByDescending { it.lastSeenMicros }
+        .map { Connection(it, app(it.uid), enrichment.destination(it)) }
+
+    val owner = OwnerInfo(
+        reverseDns = "fra24s06-in-f2.1e100.net",
+        rdap = RdapInfo("GOOGLE", "NET-142-250-0-0-1", null, "142.250.0.0 - 142.250.255.255", "Google LLC", "whois.arin.net"),
+        error = null,
+    )
 
     val dashboard = run {
         val timeline = TrafficTimeline()
@@ -282,7 +309,7 @@ private class Sample {
                 timeline.add(second + 1, flow.uid, outgoing = false, bytes = (flow.bytesIn / seconds * wave).toInt())
             }
         }
-        dashboard(flows, timeline, TimeRange.FIVE_MINUTES, now)
+        dashboard(flows, timeline, TimeRange.FIVE_MINUTES, now) { enrichment.destination(it) }
     }
 
     val tracker: Connection = connections.first { it.flow.sni == "googleads.g.doubleclick.net" }

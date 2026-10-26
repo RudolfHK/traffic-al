@@ -29,6 +29,7 @@ import io.github.rudolfhk.traffical.core.analysis.AppTraffic
 import io.github.rudolfhk.traffical.core.analysis.DashboardData
 import io.github.rudolfhk.traffical.core.analysis.Format
 import io.github.rudolfhk.traffical.core.analysis.TimeRange
+import io.github.rudolfhk.traffical.core.analysis.TrackerTraffic
 import io.github.rudolfhk.traffical.model.AppInfo
 
 /**
@@ -42,6 +43,7 @@ fun DashboardScreen(
     appInfo: (Int) -> AppInfo,
     onRangeChange: (TimeRange) -> Unit,
     onAppClick: (Int) -> Unit,
+    onTrackerClick: (String) -> Unit,
     header: @Composable () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -109,6 +111,22 @@ fun DashboardScreen(
             }
         }
         item {
+            Text(text.trackersTitle, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp))
+        }
+        if (data.trackers.isEmpty()) {
+            item {
+                Text(
+                    text = text.trackersNone,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+        }
+        items(data.trackers.take(MAX_TRACKERS_SHOWN), key = { "tracker:" + it.company }) { tracker ->
+            TrackerRow(tracker, onClick = { onTrackerClick(tracker.company) })
+        }
+        item {
             Row(
                 Modifier.padding(horizontal = 16.dp).fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -135,6 +153,34 @@ fun DashboardScreen(
     }
 }
 
+/** Tracking companies shown on the dashboard; the connection list has all of them. */
+private const val MAX_TRACKERS_SHOWN = 8
+
+@Composable
+private fun TrackerRow(tracker: TrackerTraffic, onClick: () -> Unit) {
+    val text = LocalUiText.current
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(tracker.company, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+            Text(
+                text = listOf(
+                    count(tracker.connections, text.countConnection, text.countConnections),
+                    count(tracker.apps, text.countApp, text.countApps),
+                    tracker.categories.joinToString(", "),
+                ).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(Format.bytes(tracker.bytes), style = MaterialTheme.typography.bodySmall)
+    }
+}
+
 @Composable
 private fun AppRow(traffic: AppTraffic, app: AppInfo, maxBytes: Long, onClick: () -> Unit) {
     val text = LocalUiText.current
@@ -158,7 +204,8 @@ private fun AppRow(traffic: AppTraffic, app: AppInfo, maxBytes: Long, onClick: (
         Row {
             Text(
                 text = "↑ ${Format.bytes(traffic.bytesOut)}  ↓ ${Format.bytes(traffic.bytesIn)} · " +
-                    text.appSummary.format(traffic.connections, traffic.domains),
+                    count(traffic.connections, text.countConnection, text.countConnections) + " · " +
+                    count(traffic.domains, text.countDomain, text.countDomains),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,

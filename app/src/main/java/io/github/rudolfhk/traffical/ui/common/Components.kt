@@ -260,3 +260,6 @@ fun LabelBadge(label: String, color: Color) {
         )
     }
 }
+
+/** "1 app", "3 apps": [one] and [other] are format strings with the count as %1$d. */
+internal fun count(n: Int, one: String, other: String): String = (if (n == 1) one else other).format(n)

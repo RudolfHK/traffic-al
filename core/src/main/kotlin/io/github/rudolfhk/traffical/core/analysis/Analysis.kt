@@ -1,6 +1,8 @@
 package io.github.rudolfhk.traffical.core.analysis
 
 import io.github.rudolfhk.traffical.core.capture.FlowInfo
+import io.github.rudolfhk.traffical.core.enrichment.Destination
+import io.github.rudolfhk.traffical.core.enrichment.Tracker
 import io.github.rudolfhk.traffical.core.packet.IpProtocol
 
 enum class TimeRange(val seconds: Long?) {
@@ -13,7 +15,10 @@ enum class TimeRange(val seconds: Long?) {
 
 /** Why a connection deserves a closer look. */
 enum class FlowFlag {
-    /** nDPI rates the service as tracker/advertising or its category is advertising. */
+    /**
+     * The server name is on the bundled tracker list with an advertising, analytics or
+     * telemetry category, or nDPI rates the service as tracker/advertising.
+     */
     TRACKER,
 
     /** nDPI rates the protocol as unsafe or dangerous, or the category as malware/mining. */
@@ -32,9 +37,10 @@ enum class FlowFlag {
 private val RISKY_BREEDS = setOf("Unsafe", "Potentially_Dangerous", "Dangerous")
 private val RISKY_CATEGORIES = setOf("Malware", "Mining")
 
-fun FlowInfo.flags(): Set<FlowFlag> {
+/** The flags of this connection; [tracker] is its match on the bundled tracker list. */
+fun FlowInfo.flags(tracker: Tracker? = null): Set<FlowFlag> {
     val flags = mutableSetOf<FlowFlag>()
-    if (breed == "Tracker_Ads" || category == "Advertisement") flags += FlowFlag.TRACKER
+    if (breed == "Tracker_Ads" || category == "Advertisement" || tracker?.tracking == true) flags += FlowFlag.TRACKER
     if (breed in RISKY_BREEDS || category in RISKY_CATEGORIES) flags += FlowFlag.RISKY
     val isTransport = protocol == IpProtocol.TCP || protocol == IpProtocol.UDP
     if (domain == null && isTransport && remotePort != DNS_PORT && !blocked) flags += FlowFlag.UNNAMED
@@ -54,7 +60,8 @@ val FlowInfo.protocolLabel: String
 
 /**
  * Filter of the connection list. All set criteria must match; [text] is split into words
- * that must each occur in the app, package, domain, IP, protocol, category or port.
+ * that must each occur in the app, package, domain, IP, protocol, category, port, or
+ * the destination's country, network or tracker.
  */
 data class ConnectionFilter(
     val text: String = "",
@@ -69,7 +76,13 @@ data class ConnectionFilter(
     /** True if nothing but the time range is set. */
     val isEmpty: Boolean get() = copy(timeRange = TimeRange.ALL) == ConnectionFilter()
 
-    fun matches(flow: FlowInfo, appLabel: String, packageName: String?, nowMicros: Long): Boolean {
+    fun matches(
+        flow: FlowInfo,
+        appLabel: String,
+        packageName: String?,
+        nowMicros: Long,
+        destination: Destination? = null,
+    ): Boolean {
         timeRange.seconds?.let { if (flow.lastSeenMicros < nowMicros - it * 1_000_000) return false }
         if (uid != null && flow.uid != uid) return false
         if (port != null && flow.remotePort != port && flow.localPort != port) return false
@@ -78,14 +91,14 @@ data class ConnectionFilter(
         ) {
             return false
         }
-        if (attentionOnly && flow.flags().none { it in ATTENTION_FLAGS }) return false
+        if (attentionOnly && flow.flags(destination?.tracker).none { it in ATTENTION_FLAGS }) return false
 
         val words = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
         if (words.isEmpty()) return true
         val haystack = listOfNotNull(
             appLabel, packageName, flow.domain, flow.sni, flow.serverName, flow.dnsName,
             flow.remoteAddress.hostAddress, flow.appProtocol, flow.category, flow.remotePort.toString(),
-        )
+        ) + destination?.searchTerms.orEmpty()
         return words.all { word -> haystack.any { it.contains(word, ignoreCase = true) } }
     }
 }
@@ -105,6 +118,17 @@ data class AppTraffic(
     val bytes: Long get() = bytesOut + bytesIn
 }
 
+/** Connections to the trackers of one company in a time range. */
+data class TrackerTraffic(
+    val company: String,
+    /** Category labels of its trackers, e.g. "Advertising". */
+    val categories: List<String>,
+    val connections: Int,
+    /** Number of apps that connected. */
+    val apps: Int,
+    val bytes: Long,
+)
+
 data class DashboardData(
     val range: TimeRange,
     val totals: TrafficTotals,
@@ -115,20 +139,29 @@ data class DashboardData(
     val apps: List<AppTraffic>,
     val connections: Int,
     val attention: Int,
+    /** Tracking companies, most connections first. */
+    val trackers: List<TrackerTraffic> = emptyList(),
 ) {
     companion object {
         val EMPTY = DashboardData(TimeRange.FIVE_MINUTES, TrafficTotals(), TrafficTotals(), emptyList(), emptyList(), 0, 0)
     }
 }
 
-/** Builds the dashboard of the [range] ending at [nowMicros]. */
-fun dashboard(flows: List<FlowInfo>, timeline: TrafficTimeline, range: TimeRange, nowMicros: Long): DashboardData {
+/** Builds the dashboard of the [range] ending at [nowMicros]; [destination] adds tracker knowledge. */
+fun dashboard(
+    flows: List<FlowInfo>,
+    timeline: TrafficTimeline,
+    range: TimeRange,
+    nowMicros: Long,
+    destination: (FlowInfo) -> Destination? = { null },
+): DashboardData {
     val nowSecond = Math.floorDiv(nowMicros, 1_000_000L)
     val inRange = range.seconds?.let { seconds ->
         flows.filter { it.lastSeenMicros >= nowMicros - seconds * 1_000_000 }
     } ?: flows
     val bytesByUid = timeline.totalsByUid(nowSecond, range.seconds)
     val flowsByUid = inRange.groupBy { it.uid }
+    val trackerOf = inRange.associate { it.id to destination(it)?.tracker }
 
     val apps = (bytesByUid.keys + flowsByUid.keys).map { uid ->
         val appFlows = flowsByUid[uid].orEmpty()
@@ -140,7 +173,7 @@ fun dashboard(flows: List<FlowInfo>, timeline: TrafficTimeline, range: TimeRange
             bytesIn = bytes.bytesIn,
             connections = appFlows.size,
             domains = appFlows.mapNotNull { it.domain }.distinct().size,
-            attention = appFlows.count { flow -> flow.flags().any { it in ATTENTION_FLAGS } },
+            attention = appFlows.count { flow -> flow.flags(trackerOf[flow.id]).any { it in ATTENTION_FLAGS } },
             rate = rate.total,
         )
     }.filter { it.bytes > 0 || it.connections > 0 }
@@ -154,6 +187,18 @@ fun dashboard(flows: List<FlowInfo>, timeline: TrafficTimeline, range: TimeRange
         apps = apps,
         connections = inRange.size,
         attention = apps.sumOf { it.attention },
+        trackers = inRange.filter { trackerOf[it.id]?.tracking == true }
+            .groupBy { trackerOf.getValue(it.id)!!.company }
+            .map { (company, companyFlows) ->
+                TrackerTraffic(
+                    company = company,
+                    categories = companyFlows.map { trackerOf.getValue(it.id)!!.categoryLabel }.distinct().sorted(),
+                    connections = companyFlows.size,
+                    apps = companyFlows.map { it.uid }.distinct().size,
+                    bytes = companyFlows.sumOf { it.bytesOut + it.bytesIn },
+                )
+            }
+            .sortedWith(compareByDescending<TrackerTraffic> { it.connections }.thenBy { it.company }),
     )
 }
 

@@ -40,6 +40,7 @@ import io.github.rudolfhk.traffical.core.analysis.FlowFlag
 import io.github.rudolfhk.traffical.core.analysis.Format
 import io.github.rudolfhk.traffical.core.analysis.flags
 import io.github.rudolfhk.traffical.core.analysis.protocolLabel
+import io.github.rudolfhk.traffical.core.enrichment.Destination
 import io.github.rudolfhk.traffical.model.Connection
 import java.time.Instant
 import java.time.ZoneId
@@ -63,7 +64,7 @@ fun ConnectionsScreen(
 ) {
     val text = LocalUiText.current
     val shown = remember(connections, filter, nowMicros) {
-        connections.filter { filter.matches(it.flow, it.app.label, it.app.packageName, nowMicros) }
+        connections.filter { filter.matches(it.flow, it.app.label, it.app.packageName, nowMicros, it.destination) }
     }
     // The most frequent protocols become quick filters.
     val protocols = remember(connections) {
@@ -148,7 +149,7 @@ fun ConnectionsScreen(
 @Composable
 private fun ConnectionRow(connection: Connection, onClick: () -> Unit) {
     val flow = connection.flow
-    val flags = flow.flags()
+    val flags = flow.flags(connection.destination?.tracker)
     val attention = flags.firstOrNull { it in ATTENTION_FLAGS }
     val stripe = if (attention != null) flagColor(attention) else Color.Transparent
     val domain = flow.domain
@@ -200,7 +201,9 @@ private fun ConnectionRow(connection: Connection, onClick: () -> Unit) {
             Text(
                 text = listOfNotNull(
                     flow.appProtocol ?: flow.protocolLabel,
-                    flow.category?.takeUnless { it == UNSPECIFIED_CATEGORY },
+                    connection.destination?.tracker?.let { "${it.company} · ${it.categoryLabel}" }
+                        ?: flow.category?.takeUnless { it == UNSPECIFIED_CATEGORY },
+                    connection.destination?.let(::networkLabel),
                     endpoint(flow.remoteAddress.hostAddress.orEmpty(), flow.remotePort),
                 ).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall,
@@ -213,3 +216,13 @@ private fun ConnectionRow(connection: Connection, onClick: () -> Unit) {
 }
 
 internal fun endpoint(host: String, port: Int) = if (':' in host) "[$host]:$port" else "$host:$port"
+
+/**
+ * "Google LLC, US": the network operator and country of the server, without repeating the
+ * tracker's company ("Google").
+ */
+internal fun networkLabel(destination: Destination): String? {
+    val organization = destination.network?.organization
+        ?.takeUnless { org -> destination.tracker?.let { org.startsWith(it.company, ignoreCase = true) } == true }
+    return listOfNotNull(organization, destination.country).joinToString(", ").ifEmpty { null }
+}

@@ -47,3 +47,10 @@ tasks.register<JavaExec>("exportCheck") {
     classpath = tools.runtimeClasspath
     mainClass.set("io.github.rudolfhk.traffical.core.tools.ExportCheckKt")
 }
+
+tasks.register<JavaExec>("buildEnrichment") {
+    description = "Builds the app's offline IP and tracker data (see tools/enrichment/update.sh)."
+    classpath = tools.runtimeClasspath
+    mainClass.set("io.github.rudolfhk.traffical.core.tools.BuildEnrichmentKt")
+    maxHeapSize = "2g"
+}

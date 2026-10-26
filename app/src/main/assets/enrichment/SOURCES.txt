@@ -1,0 +1,13 @@
+Offline enrichment data of Traffic AL, built by tools/enrichment/update.sh.
+
+ip.bin.gz - country and network (AS number and organization) of IP address ranges.
+  IP Geolocation by DB-IP (https://db-ip.com): "IP to Country Lite" and "IP to ASN Lite",
+  licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/), downloaded from
+  the mirror https://github.com/sapics/ip-location-db and converted to a compact range
+  table format.
+
+trackers.tsv.gz - tracker and service domains with name, company and category.
+  AdGuard companiesdb (https://github.com/AdguardTeam/companiesdb), based on WhoTracks.me,
+  licensed under CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/). This file
+  is an adaptation (domains joined with tracker and company names, as tab-separated text)
+  and is shared under the same license.

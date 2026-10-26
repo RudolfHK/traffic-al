@@ -16,7 +16,8 @@ remote VPN server, no root required. The project prompt and phase plan are in
 | 4 | Analysis UI: dashboard, live throughput, filters, connection detail with hex dump, tracker highlighting | done (needs on-device test) |
 | 5 | Background capture, recordings on storage, settings, light/dark theme | done (needs on-device test) |
 | 6 | Encrypted recordings and connection history (Android Keystore, Tink, SQLCipher), app lock with PIN and fingerprint | done (needs on-device test) |
-| 7–9 | Enrichment, TLS decryption, validation | planned |
+| 7 | Destinations: country and network of every server (offline), known trackers with company and category, owner lookup (RDAP, reverse DNS) on request | done (needs on-device test) |
+| 8–9 | TLS decryption, validation | planned |
 
 ## How it works
 
@@ -54,14 +55,17 @@ The app uid of each connection comes from `ConnectivityManager.getConnectionOwne
 - **Overview**: start/stop, the recordings, a time range (1 min to all), sent and received bytes
   with the current rate, the number of connections and of connections that need
   attention, a live throughput chart (sent/received per interval, refreshed every
-  second) and the apps ranked by data or by connections. Tapping an app opens its
-  connections.
-- **Connections**: free-text search over app, package, domain, SNI, IP, protocol,
-  category and port (all words must match), quick filters for the app, *needs
-  attention*, the most frequent protocols and the time range.
+  second), the tracker companies contacted and the apps ranked by data or by
+  connections. Tapping a tracker company or an app opens its connections.
+- **Connections**: each with the tracker's company and category or the server's network
+  and country. Free-text search over app, package, domain, SNI, IP, protocol,
+  category, port, country, network, AS number and tracker (all words must match),
+  quick filters for the app, *needs attention*, the most frequent protocols and the
+  time range.
 - **Connection detail**: app, every name known for the server (domain, TLS SNI,
   QUIC/HTTP server name, resolved DNS name), nDPI protocol, category and rating,
-  endpoints, start, duration, bytes, packets and average rate, then the connection's
+  endpoints, country, network, tracker, start, duration, bytes, packets and average
+  rate, *Owner* (looked up online on request, see below), then the connection's
   packets from the capture buffer with TCP flags and a hex dump of each payload (tap to
   expand).
 - **DNS**: every lookup with its app, answers or error and latency.
@@ -74,10 +78,36 @@ The app uid of each connection comes from `ConnectivityManager.getConnectionOwne
 The app is English only and has its own light and dark color schemes (the same on
 every Android version).
 
-A connection *needs attention* when nDPI rates it as a tracker or advertisement
-(red, *tracker*), as unsafe, dangerous, malware or mining (red, *risky*), or when the
-app connected over TCP/UDP to a bare IP address that no DNS lookup, SNI or HTTP Host
-header named (*IP only*). Bundled tracker lists come with phase 7.
+A connection *needs attention* when its server name is a known tracker with an
+advertising, analytics or telemetry category, or nDPI rates it as a tracker or
+advertisement (red, *tracker*); when nDPI rates it as unsafe, dangerous, malware or
+mining (red, *risky*); or when the app connected over TCP/UDP to a bare IP address that
+no DNS lookup, SNI or HTTP Host header named (*IP only*).
+
+## Destinations
+
+Offline, from data bundled with the app (nothing is looked up online while capturing):
+
+- **Country and network** of each server's IP address (IPv4 and IPv6): the country
+  and the autonomous system that announces it, e.g. *Google LLC, AS15169*. Source:
+  DB-IP Lite, about 1.2 million address ranges, 4.5 MB.
+- **Trackers and services** by server name (the domain or any parent domain): name,
+  company and category, e.g. *googleads.g.doubleclick.net → Google Marketing, Google,
+  advertising*. Source: AdGuard companiesdb (based on WhoTracks.me), about 5,100 domains.
+  Advertising, site/mobile analytics and telemetry count as tracking; CDNs, hosting,
+  video players and similar are shown but not flagged. The list classifies some big
+  first-party domains as advertising (google.com, facebook.com), so those count as
+  tracker connections too, also from the company's own apps.
+
+The data is loaded the first time a screen needs it (about 15 MB of memory), not by a
+capture running in the background. `tools/enrichment/update.sh` downloads newer data
+and rebuilds `app/src/main/assets/enrichment` (DB-IP Lite changes monthly).
+
+**Owner lookup** (connection detail → *Look up online*): only when you tap it, the app
+asks the DNS for the address's reverse name and [rdap.org](https://rdap.org) for its
+registration (RDAP, redirected to the regional internet registry: ARIN, RIPE NCC, ...),
+which names the organization and the address range. This sends the IP address to those
+services; it is the only network traffic of the app itself besides forwarding.
 
 ## Background capture
 
@@ -169,6 +199,7 @@ sudo tools/host-test/run.sh          # native engine end-to-end on a Linux TUN d
 ./gradlew :app:assembleDebug         # needs the Android SDK and NDK
 ./gradlew -p tools/ui-preview render # screenshots of the screens, no Android SDK needed
 ./gradlew :app:connectedDebugAndroidTest  # on a device or emulator: Keystore, Tink, SQLCipher
+tools/enrichment/update.sh           # newer IP and tracker data for the app
 ```
 
 The screens in `app/src/main/java/.../ui/common` use only Compose APIs that also exist
@@ -213,6 +244,9 @@ the PIN.
   lock. On a rooted phone, root can do what the app can, including using its Keystore
   keys on the device.
 - Android shows its VPN key icon whenever a VPN runs; the app does not hide it.
+- Country and network describe the server's address, not the company behind a domain;
+  CDNs (Akamai, Cloudflare, Fastly) serve many companies. The country is where the
+  address is registered or announced, which may differ from where the server stands.
 
 ## License
 
@@ -223,3 +257,16 @@ It includes [zdtun](https://github.com/emanuele-f/zdtun) by Emanuele Faranda
 [TRAFFIC_AL_CHANGES.md](app/src/main/cpp/zdtun/TRAFFIC_AL_CHANGES.md). Protocol detection
 uses [nDPI](https://github.com/ntop/nDPI) 5.0 by ntop (LGPL-3.0), unmodified, in
 `app/src/main/cpp/ndpi` (see [NDPI_ORIGIN.md](app/src/main/cpp/ndpi/NDPI_ORIGIN.md)).
+
+The bundled data in `app/src/main/assets/enrichment` (see
+[SOURCES.txt](app/src/main/assets/enrichment/SOURCES.txt)):
+- `ip.bin.gz`: IP geolocation by [DB-IP](https://db-ip.com) (IP to Country Lite and IP to
+  ASN Lite, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)), via
+  [sapics/ip-location-db](https://github.com/sapics/ip-location-db).
+- `trackers.tsv.gz`: [AdGuard companiesdb](https://github.com/AdguardTeam/companiesdb)
+  based on [WhoTracks.me](https://whotracks.me),
+  [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/); this adaptation is shared
+  under the same license.
+
+Disconnect's tracker list was not used: its license (CC BY-NC-SA 4.0) excludes commercial
+use, which doesn't fit a GPL-3.0 app.

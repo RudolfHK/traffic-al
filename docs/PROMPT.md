@@ -45,6 +45,18 @@ wireshark the app is good enough for it with export only."*
 | "phase 6" (Room + SQLCipher, Keystore, BiometricPrompt + PIN, EncryptedSharedPreferences) | **Recordings** encrypted with Tink streaming AEAD; the existing plain recordings are migrated. **History** of connections and DNS lookups in Room on SQLCipher. **Keys:** a Keystore master key wraps the Tink keysets, the database key and the PIN record. **App lock:** a PIN with fingerprint as an option and *erase all data* when the PIN is forgotten. **Device tests** on an Android 10 emulator in CI. | Jetpack Security (EncryptedSharedPreferences/EncryptedFile) is deprecated, and Tink is what it was built on. The history is the part of "storage" that was still missing: connections were lost whenever Android killed the background capture. |
 | (implicit) | The keys don't require the user to authenticate, and the lock protects the screens | The capture writes while the phone and the app are locked. Encryption at rest protects the files, e.g. copied via root or adb; the lock protects against someone holding the unlocked phone. |
 
+## Phase 7 (improved)
+
+The request was *"Continue with phase 7"*, whose plan named MaxMind GeoLite2 (or DB-IP
+lite), reverse DNS/RDAP on demand and bundled tracker lists (Disconnect, EasyPrivacy).
+
+| Plan | Improved | Why |
+| --- | --- | --- |
+| MaxMind GeoLite2 City + ASN | DB-IP Lite Country + ASN (CC BY 4.0) | GeoLite2 needs an account and its license limits redistribution; city-level data is 100+ MB and imprecise for servers. Country and network operator are what matter for a server. |
+| Disconnect, EasyPrivacy | AdGuard companiesdb (WhoTracks.me, CC BY-SA 4.0): domain, tracker name, company, category | Disconnect's list is CC BY-NC-SA 4.0, which a GPL-3.0 app can't include. EasyPrivacy's domain-only part has shrunk to a few lines, and its other rules match URLs, which the app can't see. companiesdb adds the company, which answers "who" rather than only "a tracker". |
+| (implicit) data format | Compact range tables (varint deltas, gzip; 4.5 MB for 1.2 M ranges) loaded lazily by the UI; a JVM tool builds them from the CSV/JSON sources; `tools/enrichment/update.sh` refreshes them | Fast offline lookups (binary search) without an MMDB library. A capture running in the background doesn't load the data. |
+| reverse DNS / RDAP on demand | A button in the connection detail; rdap.org redirects to the right registry | It is the only traffic the app creates itself, so it only happens when the user asks. |
+
 ## The prompt
 
 ```markdown
@@ -80,7 +92,7 @@ no Wi-Fi monitor mode, no capturing other devices.
 - Add unit tests in `core` for every parser or format (with real packet hex dumps).
 - Keep the tool itself private: no analytics, no crash reporting, offline databases
   only. The only network traffic the app itself creates is forwarding the captured
-  traffic.
+  traffic, plus owner lookups (RDAP, reverse DNS) when I ask for one.
 - Don't copy GPL code (PCAPdroid, zdtun) unless I explicitly approve relicensing to GPL-3.0.
   Reading it for reference is fine.
 - Document every platform limitation you hit in README.md ("Limitations").
@@ -168,8 +180,23 @@ no Wi-Fi monitor mode, no capturing other devices.
    - In CI: JVM tests for the format (with Tink), PIN and lock rules; the host test's
      capture is encrypted, exported and cut off, then read by tshark. Instrumented tests
      on an Android 10 emulator cover the Keystore keys, recordings, SQLCipher and the PIN.
-7. Destination enrichment (offline): MaxMind GeoLite2 City + ASN (or DB-IP lite),
-   reverse DNS / RDAP on demand, tracker lists (e.g. Disconnect, EasyPrivacy) bundled.
+7. Destination enrichment (offline):
+   - Country and network (ASN, organization) of every server's IPv4/IPv6 address, from
+     DB-IP Lite (CC BY 4.0) converted to compact range tables bundled as assets.
+   - Known trackers by server name (the domain or a parent domain) with name, company
+     and category, from AdGuard companiesdb (CC BY-SA 4.0). Advertising, analytics and
+     telemetry raise the *tracker* flag.
+   - Shown in the connection list and detail, and searchable. The dashboard gets
+     "Trackers contacted" per company.
+   - Reverse DNS and RDAP owner lookup only when I tap it in the connection detail.
+   - `tools/enrichment/update.sh` rebuilds the data.
+
+   Done when:
+   - 8.8.8.8 shows "Google LLC · AS15169, US".
+   - An ad SDK's connection shows its company and is flagged.
+   - The owner lookup names the registrant.
+   - Unit tests cover the formats and parsers; real-data checks run in CI; the data
+     loads from the APK on an emulator.
 8. TLS decryption (optional, limited): local CA generated on device, an in-app or
    mitmproxy-based MITM for selected apps only, SSLKEYLOGFILE-style key export into the
    PCAPNG (Decryption Secrets Block). Without root: only my own debug apps
@@ -184,10 +211,10 @@ no Wi-Fi monitor mode, no capturing other devices.
 ## Recommended usage
 
 - Start each Claude Code session with the prompt above plus "Implement phase N".
-- Phases 1 to 6 are implemented in this repository (phase 3 with nDPI 5.0 for
+- Phases 1 to 7 are implemented in this repository (phase 3 with nDPI 5.0 for
   protocol/service detection and QUIC/HTTP server names; flows and recordings are checked
-  against tshark in CI, the encrypted storage on an Android 10 emulator). Continue with
-  **7** (destination enrichment).
+  against tshark in CI, the encrypted storage and the bundled data on an Android 10
+  emulator). Continue with **8** (TLS decryption).
 - Decision taken for 4: the throughput chart is drawn with a Compose `Canvas` instead of
   Vico. The screens are shared with a Compose Desktop preview tool (tools/ui-preview)
   that renders them in CI without the Android SDK, and an area chart of two series does

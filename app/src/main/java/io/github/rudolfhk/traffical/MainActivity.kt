@@ -32,6 +32,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import io.github.rudolfhk.traffical.capture.CaptureRepository
+import io.github.rudolfhk.traffical.enrichment.EnrichmentStore
 import io.github.rudolfhk.traffical.model.BackgroundInfo
 import io.github.rudolfhk.traffical.model.ThemeMode
 import io.github.rudolfhk.traffical.security.AppLock
@@ -82,6 +83,7 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         pendingExport = savedInstanceState?.getString(STATE_PENDING_EXPORT)
         restorePrivateDnsAfterCrash()
+        EnrichmentStore.load(this)
         biometricPrompt = BiometricPrompt(
             this,
             ContextCompat.getMainExecutor(this),
@@ -260,6 +262,8 @@ class MainActivity : FragmentActivity() {
         batteryOptimized = !getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName),
         alwaysOn = CaptureRepository.status.value.alwaysOn,
         appVersion = BuildConfig.VERSION_NAME,
+        ipData = EnrichmentStore.current?.ips?.version,
+        trackerData = EnrichmentStore.current?.trackers?.version,
     )
 
     companion object {

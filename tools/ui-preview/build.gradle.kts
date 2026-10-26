@@ -33,5 +33,6 @@ tasks.register<JavaExec>("render") {
     args(
         layout.buildDirectory.dir("screens").get().asFile.path,
         repo.resolve("app/src/main/res/values/strings.xml").path,
+        repo.resolve("app/src/main/assets/enrichment").path,
     )
 }

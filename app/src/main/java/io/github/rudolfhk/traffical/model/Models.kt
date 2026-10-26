@@ -1,6 +1,8 @@
 package io.github.rudolfhk.traffical.model
 
 import io.github.rudolfhk.traffical.core.capture.FlowInfo
+import io.github.rudolfhk.traffical.core.enrichment.Destination
+import io.github.rudolfhk.traffical.core.enrichment.RdapInfo
 
 // Platform-independent UI models: also compiled by tools/ui-preview (Compose Desktop).
 
@@ -20,7 +22,8 @@ data class DnsEvent(
     val latencyMillis: Long?,
 )
 
-data class Connection(val flow: FlowInfo, val app: AppInfo)
+/** A connection with its app and, once the offline data is loaded, what is known about the server. */
+data class Connection(val flow: FlowInfo, val app: AppInfo, val destination: Destination? = null)
 
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
@@ -69,6 +72,9 @@ data class BackgroundInfo(
     /** The capture runs as always-on VPN (known while it runs). */
     val alwaysOn: Boolean,
     val appVersion: String,
+    /** Versions of the bundled IP and tracker data, null until loaded. */
+    val ipData: String? = null,
+    val trackerData: String? = null,
 )
 
 /** The app lock as the settings show it. */
@@ -77,4 +83,12 @@ data class PrivacyInfo(
     val biometric: Boolean,
     /** A fingerprint (or other biometric) is set up on the phone. */
     val biometricAvailable: Boolean,
+)
+
+/** Result of the online owner lookup of a server's IP address. */
+data class OwnerInfo(
+    val reverseDns: String?,
+    val rdap: RdapInfo?,
+    /** Why the RDAP lookup failed. */
+    val error: String?,
 )

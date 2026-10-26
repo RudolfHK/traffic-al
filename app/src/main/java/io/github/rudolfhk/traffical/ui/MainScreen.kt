@@ -39,6 +39,7 @@ import io.github.rudolfhk.traffical.core.analysis.DashboardData
 import io.github.rudolfhk.traffical.core.analysis.FlowPacket
 import io.github.rudolfhk.traffical.core.analysis.Format
 import io.github.rudolfhk.traffical.core.analysis.TimeRange
+import io.github.rudolfhk.traffical.enrichment.OwnerLookup
 import io.github.rudolfhk.traffical.model.BackgroundInfo
 import io.github.rudolfhk.traffical.model.Connection
 import io.github.rudolfhk.traffical.model.PrivacyInfo
@@ -50,6 +51,7 @@ import io.github.rudolfhk.traffical.ui.common.ConnectionDetailScreen
 import io.github.rudolfhk.traffical.ui.common.ConnectionsScreen
 import io.github.rudolfhk.traffical.ui.common.DashboardScreen
 import io.github.rudolfhk.traffical.ui.common.DnsScreen
+import io.github.rudolfhk.traffical.ui.common.OwnerState
 import io.github.rudolfhk.traffical.ui.common.LocalUiText
 import io.github.rudolfhk.traffical.ui.common.RecordingsScreen
 import io.github.rudolfhk.traffical.ui.common.SettingsScreen
@@ -160,7 +162,21 @@ fun MainScreen(actions: MainActions) {
                 LaunchedEffect(detail.flow.id, detail.flow.closed) {
                     packets = withContext(Dispatchers.Default) { CaptureRepository.packetsOf(detail) }
                 }
-                ConnectionDetailScreen(detail, packets, modifier)
+                var owner by remember(detail.flow.id) { mutableStateOf(OwnerState()) }
+                val scope = rememberCoroutineScope()
+                ConnectionDetailScreen(
+                    connection = detail,
+                    packets = packets,
+                    owner = owner,
+                    onLookupOwner = {
+                        owner = OwnerState(loading = true)
+                        scope.launch {
+                            val info = withContext(Dispatchers.IO) { OwnerLookup.lookup(detail.flow.remoteAddress) }
+                            owner = OwnerState(info = info)
+                        }
+                    },
+                    modifier = modifier,
+                )
             }
             showRecordings -> {
                 val scope = rememberCoroutineScope()
@@ -190,6 +206,10 @@ fun MainScreen(actions: MainActions) {
                     onRangeChange = { range = it },
                     onAppClick = { uid ->
                         filter = ConnectionFilter(uid = uid, timeRange = range)
+                        tab = Tab.CONNECTIONS
+                    },
+                    onTrackerClick = { company ->
+                        filter = ConnectionFilter(text = company, timeRange = range, attentionOnly = true)
                         tab = Tab.CONNECTIONS
                     },
                     header = {

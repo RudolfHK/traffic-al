@@ -9,7 +9,6 @@
     <string name="action_stop">Stop</string>
     <string name="action_clear">Clear</string>
     <string name="filter_hint">Search: app, domain, IP, protocol, port</string>
-    <string name="app_summary">%1$d connections · %2$d domains</string>
     <string name="empty_list">Nothing captured yet. Press Start and use your apps.</string>
     <string name="dns_empty">no records</string>
     <string name="app_unknown">Unknown app</string>
@@ -154,4 +153,26 @@
     <string name="export_recording_damaged">Exported %1$d packets (%2$s). %3$d file(s) ended early, e.g. because the system stopped the capture while writing; they are included up to that point.</string>
     <string name="clear_confirm_title">Clear the connection history?</string>
     <string name="clear_confirm_text">The connections and DNS lookups shown in the app are deleted, also those saved from earlier captures. Recordings stay.</string>
+    <string name="detail_country">Country</string>
+    <string name="detail_network">Network</string>
+    <string name="detail_tracker">Tracker</string>
+    <string name="detail_owner">Owner</string>
+    <string name="owner_lookup">Look up online</string>
+    <string name="owner_hint">Asks rdap.org, the responsible internet registry and the DNS resolver who owns this IP address. This sends the address to them.</string>
+    <string name="owner_reverse_dns">Reverse DNS</string>
+    <string name="owner_organization">Organization</string>
+    <string name="owner_network">Registered network</string>
+    <string name="owner_range">Address range</string>
+    <string name="owner_registry">Registry</string>
+    <string name="owner_none">none</string>
+    <string name="owner_failed">Registry lookup failed: %1$s</string>
+    <string name="trackers_title">Trackers contacted</string>
+    <string name="trackers_none">No known trackers in this time range.</string>
+    <string name="settings_data_sources">Offline data: %1$s (IP geolocation by DB-IP, db-ip.com, CC BY 4.0) and %2$s (based on WhoTracks.me, CC BY-SA 4.0).</string>
+    <string name="count_connection">%1$d connection</string>
+    <string name="count_connections">%1$d connections</string>
+    <string name="count_app">%1$d app</string>
+    <string name="count_apps">%1$d apps</string>
+    <string name="count_domain">%1$d domain</string>
+    <string name="count_domains">%1$d domains</string>
 </resources>

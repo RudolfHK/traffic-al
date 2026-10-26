@@ -166,6 +166,7 @@ fun SettingsScreen(
 
         item { SectionTitle(text.settingsAbout) }
         item { Hint(text.settingsVersion.format(background.appVersion)) }
+        item { Hint(text.settingsDataSources.format(background.ipData ?: "…", background.trackerData ?: "…")) }
     }
     SettingsDialogs(
         pinDialog = pinDialog,
