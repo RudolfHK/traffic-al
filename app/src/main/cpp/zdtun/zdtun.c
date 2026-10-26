@@ -1580,7 +1580,11 @@ static int handle_tcp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt,
         window = TCP_RTX_MAX_UNACKED;
       conn->tcp.window_size = (window > in_flight) ? (window - in_flight) : 0;
 
-      if(!FD_ISSET(conn->sock, &tun->all_fds) && (conn->tcp.window_size > 0)) {
+      if(conn->tcp.window_size == 0) {
+        // Traffic AL: the client's buffer is full, stop reading from the server until it
+        // reopens the window (a zero-length recv() would look like a server close).
+        FD_CLR(conn->sock, &tun->all_fds);
+      } else if(!FD_ISSET(conn->sock, &tun->all_fds)) {
         log_tcp_window("[%d][Window size: %u] enabling socket", conn->tuple.src_port, conn->tcp.window_size);
 
         // make the socket selectable again
@@ -1966,7 +1970,15 @@ static int handle_tcp_reply(zdtun_t *tun, zdtun_conn_t *conn) {
   int iphdr_len = zdtun_iphdr_len(tun, conn);
   char *payload_ptr = tun->reply_buf + iphdr_len + TCP_HEADER_LEN;
   int to_recv = min(conn->tcp.window_size, conn->tcp.mss);
-  int l4_len = recv(conn->sock, payload_ptr, to_recv, 0);
+  int l4_len;
+
+  // Traffic AL: with a zero window recv() would return 0, which means "server closed"
+  if(to_recv <= 0) {
+    FD_CLR(conn->sock, &tun->all_fds);
+    return 0;
+  }
+
+  l4_len = recv(conn->sock, payload_ptr, to_recv, 0);
 
   conn->tstamp = zdtun_now(tun);
 

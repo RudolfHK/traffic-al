@@ -26,7 +26,10 @@ connection stalls forever. CI on a fast runner hit this with 16 of 80 parallel d
   unacknowledged data and the FIN after 200 ms, with exponential backoff; the capture
   engine calls it on every loop iteration.
 - The window computation no longer underflows when the app advertises less than what
-  is in flight.
+  is in flight (upstream then ignored the app's window entirely). A zero window now stops
+  reading from the server until the app reopens it; before, `recv()` was called with a
+  length of 0, returned 0 and the connection was closed as if the server had finished,
+  truncating the download (seen on CI as 107 KB of a 256 KB file followed by a FIN).
 - A lost SYN+ACK is resent when the app repeats its SYN, and data or a FIN that the app
   retransmits because zdtun's ACK was lost is acknowledged again.
 
