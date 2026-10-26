@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="status_running">DNS-Anfragen werden erfasst</string>
+    <string name="status_stopped">Gestoppt</string>
+    <string name="status_counts">%1$d Anfragen · %2$d Pakete gepuffert</string>
+    <string name="status_mode_hint">Phase 2a: Nur DNS läuft über das lokale VPN, der übrige Traffic fließt normal. Außer den weitergeleiteten DNS-Anfragen verlässt nichts das Gerät.</string>
+    <string name="action_start">Start</string>
+    <string name="action_stop">Stopp</string>
+    <string name="action_export">PCAPNG exportieren</string>
+    <string name="action_clear">Leeren</string>
+    <string name="filter_hint">Filter: App, Paket, Domain oder IP</string>
+    <string name="tab_queries">DNS-Anfragen</string>
+    <string name="tab_apps">Apps</string>
+    <string name="app_summary">%1$d Anfragen · %2$d Domains</string>
+    <string name="empty_list">Noch nichts erfasst. Tippe auf Start und nutze deine Apps.</string>
+    <string name="dns_no_response">keine Antwort</string>
+    <string name="dns_empty">keine Einträge</string>
+    <string name="app_unknown">Unbekannte App</string>
+    <string name="export_done">%1$d Pakete exportiert</string>
+    <string name="export_failed">Export fehlgeschlagen</string>
+    <string name="error_vpn_consent_denied">Die VPN-Berechtigung wurde verweigert.</string>
+    <string name="error_vpn_establish">Das lokale VPN konnte nicht gestartet werden. Ist ein anderes VPN oder privates DNS (strikt) aktiv?</string>
+    <string name="notification_channel">Mitschnitt</string>
+    <string name="notification_title">Traffic-Mitschnitt aktiv</string>
+    <string name="notification_text">Erfasst, welche Apps welche Domains abfragen.</string>
+</resources>
