@@ -1,6 +1,7 @@
 package io.github.rudolfhk.traffical.enrichment
 
 import android.content.Context
+import android.content.res.AssetManager
 import android.util.Log
 import io.github.rudolfhk.traffical.core.enrichment.Enrichment
 import io.github.rudolfhk.traffical.core.enrichment.IpDatabase
@@ -8,6 +9,8 @@ import io.github.rudolfhk.traffical.core.enrichment.TrackerList
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.FileNotFoundException
+import java.io.InputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.GZIPInputStream
 import kotlin.concurrent.thread
@@ -32,10 +35,20 @@ object EnrichmentStore {
         if (!started.compareAndSet(false, true)) return
         val assets = context.applicationContext.assets
         thread(name = "enrichment", isDaemon = true) {
-            val ips = read("IP database") { GZIPInputStream(assets.open("enrichment/ip.bin.gz")).use(IpDatabase::read) }
-            val trackers = read("tracker list") { GZIPInputStream(assets.open("enrichment/trackers.tsv.gz")).use(TrackerList::read) }
+            val ips = read("IP database") { open(assets, "ip.bin").use(IpDatabase::read) }
+            val trackers = read("tracker list") { open(assets, "trackers.tsv").use(TrackerList::read) }
             _enrichment.value = Enrichment(ips, trackers)
         }
+    }
+
+    /**
+     * The repository keeps the data gzipped (enrichment/ip.bin.gz); the Android Gradle
+     * plugin's asset merger decompresses .gz assets and drops the suffix, like aapt did.
+     */
+    private fun open(assets: AssetManager, name: String): InputStream = try {
+        assets.open("enrichment/$name")
+    } catch (e: FileNotFoundException) {
+        GZIPInputStream(assets.open("enrichment/$name.gz"))
     }
 
     private fun <T> read(what: String, block: () -> T): T? = try {
