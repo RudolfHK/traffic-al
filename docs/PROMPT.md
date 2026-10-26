@@ -34,6 +34,17 @@ phase 5."* Improved into concrete, checkable requirements:
 | "silent sniffing: the app runs in the background and captures" | Phase 5a below: the capture runs with the app closed, swiped away and the screen off. A minimal notification with no sound and no status-bar icon. Restart after the system kills it, always-on VPN, optional start at boot, a Quick Settings tile. | Android requires a foreground service for this. The VPN key icon and the consent dialog are system UI; hiding them is neither possible without modifying the system nor wanted for an audit of your own phone. |
 | "continue with phase 5" | Phase 5 = background capture + recordings to storage + UDP live export + a settings screen | A capture running for hours in the background is only useful if every packet is kept, not just the last 64 MB in memory. |
 
+## Additions for phase 6 (improved)
+
+The request was: *"Continue with phase 6. Also I don't really need the live port to
+wireshark the app is good enough for it with export only."*
+
+| Request | Improved | Why |
+| --- | --- | --- |
+| "don't need the live port to Wireshark" | Remove the UDP live export entirely: the code, the setting, the receiver script and its CI check. Export of recordings stays. | Less code and nothing that sends captured traffic over the network. |
+| "phase 6" (Room + SQLCipher, Keystore, BiometricPrompt + PIN, EncryptedSharedPreferences) | **Recordings** encrypted with Tink streaming AEAD; the existing plain recordings are migrated. **History** of connections and DNS lookups in Room on SQLCipher. **Keys:** a Keystore master key wraps the Tink keysets, the database key and the PIN record. **App lock:** a PIN with fingerprint as an option and *erase all data* when the PIN is forgotten. **Device tests** on an Android 10 emulator in CI. | Jetpack Security (EncryptedSharedPreferences/EncryptedFile) is deprecated, and Tink is what it was built on. The history is the part of "storage" that was still missing: connections were lost whenever Android killed the background capture. |
+| (implicit) | The keys don't require the user to authenticate, and the lock protects the screens | The capture writes while the phone and the app are locked. Encryption at rest protects the files, e.g. copied via root or adb; the lock protects against someone holding the unlocked phone. |
+
 ## The prompt
 
 ```markdown
@@ -69,7 +80,7 @@ no Wi-Fi monitor mode, no capturing other devices.
 - Add unit tests in `core` for every parser or format (with real packet hex dumps).
 - Keep the tool itself private: no analytics, no crash reporting, offline databases
   only. The only network traffic the app itself creates is forwarding the captured
-  traffic and, when I switch it on, the UDP live export to the host I enter.
+  traffic.
 - Don't copy GPL code (PCAPdroid, zdtun) unless I explicitly approve relicensing to GPL-3.0.
   Reading it for reference is fine.
 - Document every platform limitation you hit in README.md ("Limitations").
@@ -92,7 +103,7 @@ no Wi-Fi monitor mode, no capturing other devices.
 4. Analysis UI: dashboard sorted by bytes/connections per app, filters (app, domain, IP,
    protocol, port, time range, free text), live throughput chart (Vico), flow detail with
    hex dump, highlighting of unknown or tracker destinations.
-5. Background ("silent") capture, recordings and live export.
+5. Background ("silent") capture and recordings.
    a. Background capture:
       - The capture keeps running with the app closed, swiped away from recents and the
         screen off.
@@ -114,26 +125,49 @@ no Wi-Fi monitor mode, no capturing other devices.
       - A recordings screen lists them (start, duration, size) with export and delete.
         Export goes through the system file picker as one multi-section PCAPNG.
       - Plain files until phase 6 encrypts them.
-   c. Live export over UDP to a host and port I enter:
-      - PCAP with LINKTYPE_RAW, exactly like PCAPdroid's UDP exporter: a 24-byte header
-        datagram, then one record per datagram. PCAPdroid's `udp_receiver.py` must work
-        with it.
-      - Or PCAPNG with the app comment on each packet.
-      - `tools/udp-receiver.py` handles both and pipes into `wireshark -k -i -`.
+   c. (A UDP live export to Wireshark was built here and removed after phase 5: exporting
+      recordings is enough.)
    d. Settings screen: theme, start at boot, battery optimization, a shortcut to the
-      always-on VPN settings, recording on/off and its limit, and the UDP export.
+      always-on VPN settings, recording on/off and its limit.
 
    Done when:
    - With the app swiped away and the screen off, the capture runs for an hour and the
      recording covers the whole hour.
    - An exported recording opens in Wireshark with app comments.
-   - The live stream shows up in Wireshark on the PC.
    - The tile starts and stops the capture.
-   - In CI: unit tests cover the formats, rotation and limits. The host test's capture,
-     written as a segmented recording and sent over UDP to the receiver script, is read
-     by tshark with every packet.
-6. Encrypted storage and app lock: Room + SQLCipher, key in Android Keystore,
-   BiometricPrompt + PIN, EncryptedSharedPreferences. Captures on disk are encrypted.
+   - In CI: unit tests cover the format, rotation and limits. The host test's capture,
+     written as a segmented recording, is read by tshark with every packet.
+6. Encrypted storage and app lock.
+   a. Keys: a master key in the Android Keystore wraps Tink keysets kept in the app's
+      preferences. No user authentication is required, so the capture can write while
+      locked.
+   b. Recordings: every segment is encrypted with Tink streaming AEAD (AES-256-GCM-HKDF,
+      4 KB segments). Associated data is "<recording>/<segment>", so segments can't be
+      swapped. Export decrypts to PCAPNG and copies whole blocks only, so a segment cut
+      off by a killed process still exports cleanly. Plain recordings from phase 5 are
+      encrypted on first start.
+   c. History: connections and DNS lookups in Room on SQLCipher, with a random key
+      stored encrypted. Saved every 10 s and when the capture stops; the newest 2,000 are
+      shown after a restart; capped at 200,000 rows each. Clear deletes them too, after a
+      confirmation.
+   d. App lock (optional):
+      - A 4 to 12 digit PIN, stored as salted PBKDF2-SHA256 and itself encrypted.
+      - Fingerprint via BiometricPrompt, with "Use PIN" as the fallback.
+      - Locks at start and after 60 s in the background.
+      - Growing waits after 5 wrong PINs.
+      - FLAG_SECURE while the lock is on.
+      - *Forgot the PIN?* erases recordings and history and removes the lock.
+   e. Settings: app lock, fingerprint, change PIN, an encryption note, erase all data.
+
+   Done when:
+   - After an update from phase 5, old recordings are encrypted and still export.
+   - The recording files and the database file show no readable traffic (copy them via
+     root).
+   - Connections are still listed after Android killed the app.
+   - The app asks for the PIN or fingerprint after a minute in the background.
+   - In CI: JVM tests for the format (with Tink), PIN and lock rules; the host test's
+     capture is encrypted, exported and cut off, then read by tshark. Instrumented tests
+     on an Android 10 emulator cover the Keystore keys, recordings, SQLCipher and the PIN.
 7. Destination enrichment (offline): MaxMind GeoLite2 City + ASN (or DB-IP lite),
    reverse DNS / RDAP on demand, tracker lists (e.g. Disconnect, EasyPrivacy) bundled.
 8. TLS decryption (optional, limited): local CA generated on device, an in-app or
@@ -150,10 +184,10 @@ no Wi-Fi monitor mode, no capturing other devices.
 ## Recommended usage
 
 - Start each Claude Code session with the prompt above plus "Implement phase N".
-- Phases 1 to 5 are implemented in this repository (phase 3 with nDPI 5.0 for
-  protocol/service detection and QUIC/HTTP server names; flows, recordings and the UDP
-  stream are checked against tshark in CI). Continue with **6** (encrypted storage and
-  app lock).
+- Phases 1 to 6 are implemented in this repository (phase 3 with nDPI 5.0 for
+  protocol/service detection and QUIC/HTTP server names; flows and recordings are checked
+  against tshark in CI, the encrypted storage on an Android 10 emulator). Continue with
+  **7** (destination enrichment).
 - Decision taken for 4: the throughput chart is drawn with a Compose `Canvas` instead of
   Vico. The screens are shared with a Compose Desktop preview tool (tools/ui-preview)
   that renders them in CI without the Android SDK, and an area chart of two series does

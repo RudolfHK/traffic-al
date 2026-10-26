@@ -8,14 +8,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -27,28 +25,31 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.github.rudolfhk.traffical.core.analysis.Format
-import io.github.rudolfhk.traffical.core.export.StreamFormat
 import io.github.rudolfhk.traffical.model.AppSettings
 import io.github.rudolfhk.traffical.model.BackgroundInfo
-import io.github.rudolfhk.traffical.model.RecorderStatus
+import io.github.rudolfhk.traffical.model.PrivacyInfo
 import io.github.rudolfhk.traffical.model.ThemeMode
 
-/** Theme, background capture, recording and UDP live export. */
+/** Theme, background capture, recording and privacy (app lock, encryption, erasing). */
 @Composable
 fun SettingsScreen(
     settings: AppSettings,
     background: BackgroundInfo,
-    recorder: RecorderStatus,
+    privacy: PrivacyInfo,
     onChange: ((AppSettings) -> AppSettings) -> Unit,
     onRequestBatteryExemption: () -> Unit,
     onOpenVpnSettings: () -> Unit,
+    onSetPin: (String) -> Unit,
+    onDisableLock: () -> Unit,
+    onBiometricChange: (Boolean) -> Unit,
+    onEraseAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val text = LocalUiText.current
+    var pinDialog by remember { mutableStateOf(false) }
+    var confirmErase by remember { mutableStateOf(false) }
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
         item { SectionTitle(text.settingsAppearance) }
         item {
@@ -116,77 +117,101 @@ fun SettingsScreen(
             )
         }
 
-        item { SectionTitle(text.settingsUdp) }
+        item { SectionTitle(text.settingsPrivacy) }
         item {
             SwitchRow(
-                title = text.settingsUdpEnabled,
-                subtitle = null,
-                checked = settings.udpExport,
-                onCheckedChange = { on -> onChange { it.copy(udpExport = on) } },
+                title = text.settingsLock,
+                subtitle = text.settingsLockHint,
+                checked = privacy.lockEnabled,
+                onCheckedChange = { on -> if (on) pinDialog = true else onDisableLock() },
             )
         }
-        item { UdpTarget(settings, onChange) }
-        item {
-            ChoiceRow(
-                title = text.settingsUdpFormat,
-                options = StreamFormat.values().toList(),
-                selected = settings.udpFormat,
-                label = { if (it == StreamFormat.PCAP) text.formatPcap else text.formatPcapng },
-                onSelect = { format -> onChange { it.copy(udpFormat = format) } },
-            )
-        }
-        item {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                when {
-                    recorder.udpError != null -> Text(
-                        text = text.settingsUdpError.format(recorder.udpError),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    recorder.udpTarget != null -> Text(
-                        text = text.settingsUdpStatus.format(recorder.udpPackets, recorder.udpTarget),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                Text(
-                    text = text.settingsUdpHint.format(settings.udpPort),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
+        if (privacy.lockEnabled) {
+            item {
+                SwitchRow(
+                    title = text.settingsBiometric,
+                    subtitle = text.settingsBiometricUnavailable.takeIf { !privacy.biometricAvailable },
+                    checked = privacy.biometric && privacy.biometricAvailable,
+                    onCheckedChange = { on -> if (privacy.biometricAvailable) onBiometricChange(on) },
                 )
             }
+            item {
+                ActionRow(
+                    title = text.settingsChangePin,
+                    subtitle = null,
+                    subtitleColor = null,
+                    action = text.actionChange,
+                    onAction = { pinDialog = true },
+                )
+            }
+        }
+        item {
+            ActionRow(
+                title = text.settingsEncryption,
+                subtitle = text.settingsEncryptionHint,
+                subtitleColor = null,
+                action = null,
+                onAction = {},
+            )
+        }
+        item {
+            ActionRow(
+                title = text.settingsErase,
+                subtitle = text.settingsEraseHint,
+                subtitleColor = null,
+                action = text.actionErase,
+                onAction = { confirmErase = true },
+            )
         }
 
         item { SectionTitle(text.settingsAbout) }
         item { Hint(text.settingsVersion.format(background.appVersion)) }
     }
+    SettingsDialogs(
+        pinDialog = pinDialog,
+        confirmErase = confirmErase,
+        onSetPin = onSetPin,
+        onEraseAll = onEraseAll,
+        onDismiss = {
+            pinDialog = false
+            confirmErase = false
+        },
+    )
 }
 
 @Composable
-private fun UdpTarget(settings: AppSettings, onChange: ((AppSettings) -> AppSettings) -> Unit) {
+private fun SettingsDialogs(
+    pinDialog: Boolean,
+    confirmErase: Boolean,
+    onSetPin: (String) -> Unit,
+    onEraseAll: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val text = LocalUiText.current
-    var port by remember(settings.udpPort) { mutableStateOf(settings.udpPort.toString()) }
-    Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            value = settings.udpHost,
-            onValueChange = { host -> onChange { it.copy(udpHost = host.trim()) } },
-            label = { Text(text.settingsUdpHost) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.weight(1f),
-        )
-        OutlinedTextField(
-            value = port,
-            onValueChange = { value ->
-                port = value.filter(Char::isDigit).take(5)
-                port.toIntOrNull()?.takeIf { it in 1..65535 }?.let { number -> onChange { it.copy(udpPort = number) } }
+    if (pinDialog) {
+        PinDialog(
+            title = text.pinTitle,
+            onSave = { pin ->
+                onDismiss()
+                onSetPin(pin)
             },
-            label = { Text(text.settingsUdpPort) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.width(110.dp),
+            onDismiss = onDismiss,
+        )
+    }
+    if (confirmErase) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text(text.eraseTitle) },
+            text = { Text(text.settingsEraseText) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDismiss()
+                        onEraseAll()
+                    },
+                ) { Text(text.actionErase, color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = onDismiss) { Text(text.actionCancel) } },
         )
     }
 }
@@ -224,18 +249,20 @@ private fun SwitchRow(title: String, subtitle: String?, checked: Boolean, onChec
 }
 
 @Composable
-private fun ActionRow(title: String, subtitle: String, subtitleColor: Color?, action: String?, onAction: () -> Unit) {
+private fun ActionRow(title: String, subtitle: String?, subtitleColor: Color?, action: String?, onAction: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f).padding(end = 8.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = subtitleColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = subtitleColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         if (action != null) TextButton(onClick = onAction) { Text(action) }
     }

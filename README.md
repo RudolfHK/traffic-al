@@ -14,8 +14,9 @@ remote VPN server, no root required. The project prompt and phase plan are in
 | 2b | Full capture through zdtun: every connection per app, DNS, SNI, PCAPNG export | done (needs on-device test) |
 | 3 | Connection tracking: protocol/service/category via nDPI, QUIC and HTTP server names, flows verified against tshark | done (needs on-device test) |
 | 4 | Analysis UI: dashboard, live throughput, filters, connection detail with hex dump, tracker highlighting | done (needs on-device test) |
-| 5 | Background capture, recordings on storage, UDP live export to Wireshark, settings, light/dark theme | done (needs on-device test) |
-| 6–9 | Encrypted storage and app lock, enrichment, TLS decryption, validation | planned |
+| 5 | Background capture, recordings on storage, settings, light/dark theme | done (needs on-device test) |
+| 6 | Encrypted recordings and connection history (Android Keystore, Tink, SQLCipher), app lock with PIN and fingerprint | done (needs on-device test) |
+| 7–9 | Enrichment, TLS decryption, validation | planned |
 
 ## How it works
 
@@ -38,11 +39,11 @@ apps ──all IP traffic──▶ TUN (VPN, 10.215.173.1, DNS 10.215.173.2)
                   "TLS.YouTube"), category, server name (SNI, QUIC, HTTP Host or the
                   DNS name the app resolved), bytes and packets per direction, first/last
                   seen; DNS lookups; 64 MB packet buffer → PCAPNG
-                            │
-                            ▼
-                recorder (own thread)
-                  ├─ recording: PCAPNG files with the app per packet, storage limit
-                  └─ live export: UDP to Wireshark on a PC (PCAP or PCAPNG)
+                     │                                   │
+                     ▼                                   ▼
+          recorder (own thread)               history (own thread)
+            encrypted PCAPNG files with         connections and DNS lookups in an
+            the app per packet, storage limit   SQLCipher database, saved every 10 s
 ```
 
 The app uid of each connection comes from `ConnectivityManager.getConnectionOwnerUid`
@@ -68,7 +69,7 @@ The app uid of each connection comes from `ConnectivityManager.getConnectionOwne
   size, export (system file picker) and delete, the storage used, and an export of the
   packets in memory.
 - **Settings**: theme (system, light, dark), background capture, recording and its
-  storage limit, UDP live export.
+  storage limit, app lock, erase all data.
 
 The app is English only and has its own light and dark color schemes (the same on
 every Android version).
@@ -101,27 +102,40 @@ the screen off, until you stop it:
 While no screen of the app is visible, it does no UI work: the connection list is only
 built when a screen shows it. Memory stays bounded however long the capture runs
 (10,000 connections, 5,000 DNS lookups, 64 MB of packets); everything else goes to the
-recording.
+recording and the history. If Android kills the app, the connections and lookups saved
+so far are listed again when it restarts.
 
-## Recordings and live export
+## Recordings
 
-- **Recordings**: every packet is saved as PCAPNG in the app's private storage, with
-  the app as each packet's comment (`uid=10123 app=com.android.chrome`). A recording is a
-  folder of files of up to 64 MB; when all recordings reach the storage limit (250 MB,
-  1 GB or 4 GB), the oldest files are deleted. **Export** writes a recording as one
-  PCAPNG file (one section per file) that opens in Wireshark; a running recording can
-  be exported too (up to the moment of the export).
-- **Live export** (Settings → Live export to Wireshark): every packet is sent over UDP to
-  the PC address and port you enter, while the capture runs. On the PC:
+Every packet is saved as PCAPNG with the app as each packet's comment
+(`uid=10123 app=com.android.chrome`), encrypted (see below). A recording is a folder of
+files of up to 64 MB; when all recordings reach the storage limit (250 MB, 1 GB or 4 GB),
+the oldest files are deleted. **Export** decrypts a recording into one PCAPNG file (one
+section per file) that opens in Wireshark; a running recording can be exported too (up
+to the moment of the export). If Android killed the capture while it was writing a file,
+that file is exported up to its last complete packet.
 
-  ```
-  python3 tools/udp-receiver.py -p 1234 | wireshark -k -i -
-  ```
+## Encryption and app lock
 
-  *PCAP (PCAPdroid)* is byte for byte the format of PCAPdroid's UDP exporter, so
-  PCAPdroid's `udp_receiver.py` works as well; *PCAPNG with apps* adds the app comment
-  to every packet. The receiver can start before or after the capture; restart it after
-  switching the format. The stream is not encrypted: use it on your own network only.
+- **Encrypted storage.** Recordings are encrypted with [Tink](https://github.com/tink-crypto/tink-java)
+  streaming AEAD (AES-256-GCM, a fresh key per file derived from the recording key). The
+  history of connections and DNS lookups is an [SQLCipher](https://www.zetetic.net/sqlcipher/)
+  database whose random key is stored encrypted. All keys are wrapped by a master key in
+  the Android Keystore, which never hands it out: copying the app's files (via root, adb
+  or a backup) gives nothing readable. The keys need no fingerprint or PIN, because the
+  capture writes while the phone is locked. So anyone who can use the unlocked app can
+  read the data; the app lock is for that. Recordings of version 0.5 are encrypted on
+  the first start. Exported files are plain PCAPNG.
+- **App lock** (Settings → Privacy): a PIN of 4 to 12 digits, optionally the
+  fingerprint.
+  - The app asks for it when it opens and after a minute in the background; the capture
+    keeps running meanwhile.
+  - After five wrong PINs it waits 30 s, then doubles the wait.
+  - The PIN is stored as a salted PBKDF2 hash, itself encrypted with a Keystore key.
+  - While the lock is on, screenshots of the app are blocked and the recent apps
+    overview shows no content.
+  - *Forgot the PIN?* on the lock screen erases all recordings and the history and
+    removes the lock.
 
 ## Encrypted DNS (Private DNS, DoH)
 
@@ -154,6 +168,7 @@ adb shell pm grant io.github.rudolfhk.traffical android.permission.WRITE_SECURE_
 sudo tools/host-test/run.sh          # native engine end-to-end on a Linux TUN device
 ./gradlew :app:assembleDebug         # needs the Android SDK and NDK
 ./gradlew -p tools/ui-preview render # screenshots of the screens, no Android SDK needed
+./gradlew :app:connectedDebugAndroidTest  # on a device or emulator: Keystore, Tink, SQLCipher
 ```
 
 The screens in `app/src/main/java/.../ui/common` use only Compose APIs that also exist
@@ -172,10 +187,19 @@ app on purpose (`DROP_RATE`).
 flow records with the Kotlin core and checks that every flow matches tshark's
 conversations (`tshark -z conv,tcp -z conv,udp`: frames and bytes per direction) and
 that nDPI classified DNS, HTTP, TLS (SNI) and QUIC (SNI) and rated every classified
-flow. It also writes the packets as a recording in small files (and once more with a
-storage limit that forces deleting old files) and streams them over UDP, as PCAP and as
-PCAPNG, to two `tools/udp-receiver.py` instances; tshark must read all of it with every
-packet, the same packet lengths and the app comments. CI runs all of it.
+flow. It also writes the packets as recordings and exports them:
+- in small files;
+- with a storage limit that forces deleting old files;
+- encrypted like in the app;
+- encrypted with the last file cut off, as when Android kills the capture.
+
+tshark must read every export without errors, with the same packet lengths and the app
+comments, and the encrypted files must contain no plaintext. CI runs all of it.
+
+A second CI job runs the instrumented tests (`app/src/androidTest`) on an Android 10
+emulator: recordings encrypted with the Keystore-backed keys, the migration of plain
+recordings, the SQLCipher history (written, reopened, file not readable as SQLite) and
+the PIN.
 
 ## Limitations
 
@@ -183,10 +207,11 @@ packet, the same packet lengths and the app comments. CI runs all of it.
 - IPv6 is routed through the capture only if the network has a global IPv6 address.
 - nDPI classifies a connection from its first 12 packets; protocols that reveal
   themselves later stay "Unknown".
-- Recordings are plain PCAPNG files in the app's private storage until phase 6 encrypts
-  them. Connections and DNS lookups live in memory only (they are rebuilt from a
-  recording in a later phase).
-- The live export sends your traffic unencrypted over the network to the PC.
+- The overview's totals and throughput chart cover the time since the app last started;
+  the connection list and DNS lookups include earlier runs (from the history).
+- Encryption at rest doesn't help against someone who can unlock the app; use the app
+  lock. On a rooted phone, root can do what the app can, including using its Keystore
+  keys on the device.
 - Android shows its VPN key icon whenever a VPN runs; the app does not hide it.
 
 ## License

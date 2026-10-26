@@ -2,10 +2,10 @@ package io.github.rudolfhk.traffical.capture
 
 import android.util.Log
 import io.github.rudolfhk.traffical.core.capture.CaptureRecord
-import io.github.rudolfhk.traffical.core.export.UdpExporter
 import io.github.rudolfhk.traffical.core.recording.Recording
+import io.github.rudolfhk.traffical.core.recording.RecordingStore
 import io.github.rudolfhk.traffical.core.recording.RecordingWriter
-import io.github.rudolfhk.traffical.core.recording.Recordings
+import io.github.rudolfhk.traffical.core.recording.SegmentCodec
 import io.github.rudolfhk.traffical.model.AppSettings
 import io.github.rudolfhk.traffical.model.RecorderStatus
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,20 +13,19 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.io.IOException
-import java.net.InetAddress
-import java.net.InetSocketAddress
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Saves captured packets as a recording and streams them over UDP, on its own thread so
- * the capture thread never waits for the storage or the network. All state except the
- * queue size is only touched on that thread.
+ * Saves captured packets as encrypted recordings, on its own thread so the capture thread
+ * never waits for the storage. All state except the queue size is only touched on that
+ * thread.
  */
 class CaptureRecorder(
-    private val root: File,
+    root: File,
+    codec: () -> SegmentCodec,
     private val comment: (CaptureRecord) -> String?,
 ) {
     private val executor = Executors.newSingleThreadExecutor { Thread(it, "recorder") }
@@ -35,31 +34,43 @@ class CaptureRecorder(
     private val _status = MutableStateFlow(RecorderStatus())
     val status: StateFlow<RecorderStatus> = _status.asStateFlow()
 
+    private var store: RecordingStore? = null
     private var running = false
     private var writer: RecordingWriter? = null
     private var storageError: String? = null
-    private var exporter: UdpExporter? = null
-    private var exporterKey: String? = null
-    private var udpError: String? = null
     private var dropped = 0L
     private var publishedAtMillis = 0L
+
+    init {
+        // Creating the keys takes a moment; recordings of earlier versions are unencrypted.
+        executor.execute {
+            store = try {
+                RecordingStore(root, codec()).also { store ->
+                    val migrated = store.migrate(SegmentCodec.Plain)
+                    if (migrated > 0) Log.i(TAG, "encrypted $migrated segments of earlier recordings")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "recording encryption unavailable", e)
+                storageError = e.message ?: e.javaClass.simpleName
+                null
+            }
+        }
+    }
 
     fun start(settings: AppSettings) = executor.execute {
         running = true
         dropped = 0
-        storageError = null
+        if (store != null) storageError = null
         apply(settings)
     }
 
     fun stop() = executor.execute {
         running = false
         closeWriter()
-        closeExporter()
-        udpError = null
         publish(force = true)
     }
 
-    /** Applies changed settings; a running capture switches recording and export on or off. */
+    /** Applies changed settings; a running capture switches recording on or off. */
     fun configure(settings: AppSettings) = executor.execute { apply(settings) }
 
     /** Called on the capture thread. Drops the packets if the recorder fell behind. */
@@ -77,80 +88,68 @@ class CaptureRecorder(
         }
     }
 
+    /** The saved recordings, newest first. */
+    fun list(): Future<List<Recording>> = executor.submit(Callable { store?.list().orEmpty() })
+
     /**
-     * The recording [name] as it is on disk, with only finished segments: the segment being
+     * The store and the recording [name] with only finished segments: the segment being
      * written is finished first, so a running recording can be exported.
      */
-    fun finishedRecording(name: String): Future<Recording?> = executor.submit(
+    fun finishedRecording(name: String): Future<Pair<RecordingStore, Recording>?> = executor.submit(
         Callable {
+            val store = store ?: return@Callable null
             val active = writer
             if (active != null && active.directory.name == name) active.rotate()
-            Recordings.list(root).firstOrNull { it.name == name }
+            store.list().firstOrNull { it.name == name }?.let { store to it }
         },
     )
 
     /** Deletes a recording that is not being written. */
     fun delete(name: String): Future<Boolean> = executor.submit(
         Callable {
+            val store = store ?: return@Callable false
             if (writer?.directory?.name == name) return@Callable false
-            Recordings.list(root).firstOrNull { it.name == name }?.let(Recordings::delete) ?: false
+            store.list().firstOrNull { it.name == name }?.let(store::delete) ?: false
         },
     )
 
+    /** Deletes every recording; a running one starts over. */
+    fun deleteAll(): Future<*> = executor.submit(
+        Runnable {
+            val store = store ?: return@Runnable
+            val restart = writer != null
+            closeWriter()
+            store.list().forEach(store::delete)
+            if (restart) writer = store.writer(System.currentTimeMillis(), currentLimit)
+            publish(force = true)
+        },
+    )
+
+    private var currentLimit = AppSettings().storageLimitBytes
+
     private fun apply(settings: AppSettings) {
-        val limit = settings.storageLimitBytes
+        val store = store
+        currentLimit = settings.storageLimitBytes
         val current = writer
         when {
+            store == null -> Unit
             running && settings.recordToStorage && current == null && storageError == null ->
-                writer = RecordingWriter(root, System.currentTimeMillis(), limit)
+                writer = store.writer(System.currentTimeMillis(), currentLimit)
             current != null && !settings.recordToStorage -> closeWriter()
-            current != null -> current.maxTotalBytes = limit
-            else -> Recordings.trim(root, limit)
-        }
-
-        val key = if (running && settings.udpExport && settings.udpHost.isNotBlank()) {
-            "${settings.udpHost.trim()}:${settings.udpPort}|${settings.udpFormat}"
-        } else {
-            null
-        }
-        if (key != exporterKey) {
-            closeExporter()
-            exporterKey = key
-            udpError = null
-            if (key != null) {
-                exporter = try {
-                    val target = InetSocketAddress(InetAddress.getByName(settings.udpHost.trim()), settings.udpPort)
-                    UdpExporter(target, settings.udpFormat)
-                } catch (e: IOException) {
-                    udpError = e.message ?: e.javaClass.simpleName
-                    null
-                }
-            }
+            current != null -> current.maxTotalBytes = currentLimit
+            else -> store.trim(currentLimit)
         }
         publish(force = true)
     }
 
     private fun write(records: List<CaptureRecord>) {
         if (!running) return
-        val recording = writer
-        val udp = exporter
-        if (recording == null && udp == null) return
-        for (record in records) {
-            val text = comment(record)
-            if (recording != null && writer != null) {
-                try {
-                    recording.write(record.timestampMicros, record.packet, text)
-                } catch (e: IOException) {
-                    Log.e(TAG, "recording stopped", e)
-                    storageError = e.message ?: e.javaClass.simpleName
-                    closeWriter()
-                }
-            }
-            udp?.send(record.timestampMicros, record.packet, text)
-        }
+        val recording = writer ?: return
         try {
-            writer?.flush()
+            for (record in records) recording.write(record.timestampMicros, record.packet, comment(record))
+            recording.flush()
         } catch (e: IOException) {
+            Log.e(TAG, "recording stopped", e)
             storageError = e.message ?: e.javaClass.simpleName
             closeWriter()
         }
@@ -166,23 +165,13 @@ class CaptureRecorder(
         writer = null
     }
 
-    private fun closeExporter() {
-        exporter?.close()
-        exporter = null
-        exporterKey = null
-    }
-
     private fun publish(force: Boolean) {
         val now = System.currentTimeMillis()
         if (!force && now - publishedAtMillis < PUBLISH_INTERVAL_MILLIS) return
         publishedAtMillis = now
-        val udp = exporter
         _status.value = RecorderStatus(
             recording = writer?.directory?.name,
             recordedBytes = writer?.bytes ?: 0,
-            udpTarget = exporterKey?.substringBefore('|')?.takeIf { udp != null },
-            udpPackets = udp?.packets ?: 0,
-            udpError = udpError ?: udp?.lastError?.let { it.message ?: it.javaClass.simpleName },
             storageError = storageError,
             droppedPackets = dropped,
         )

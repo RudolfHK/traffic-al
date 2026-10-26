@@ -12,15 +12,20 @@ import io.github.rudolfhk.traffical.core.capture.CaptureBatch
 import io.github.rudolfhk.traffical.core.capture.CaptureRecord
 import io.github.rudolfhk.traffical.core.capture.Direction
 import io.github.rudolfhk.traffical.core.capture.DnsLookup
+import io.github.rudolfhk.traffical.core.capture.FlowInfo
 import io.github.rudolfhk.traffical.core.capture.FlowTracker
 import io.github.rudolfhk.traffical.core.dns.DnsType
 import io.github.rudolfhk.traffical.core.pcap.PcapngWriter
-import io.github.rudolfhk.traffical.core.recording.Recordings
+import io.github.rudolfhk.traffical.core.recording.ExportResult
+import io.github.rudolfhk.traffical.history.History
+import io.github.rudolfhk.traffical.history.HistoryStore
+import io.github.rudolfhk.traffical.history.StoredLookup
 import io.github.rudolfhk.traffical.model.AppInfo
 import io.github.rudolfhk.traffical.model.Connection
 import io.github.rudolfhk.traffical.model.DnsEvent
 import io.github.rudolfhk.traffical.model.RecorderStatus
 import io.github.rudolfhk.traffical.model.RecordingItem
+import io.github.rudolfhk.traffical.security.Keys
 import io.github.rudolfhk.traffical.settings.SettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,14 +57,18 @@ data class CaptureStatus(
 
 /**
  * Capture state shared by the VPN service (writer, on the capture thread) and the UI.
- * Connections and DNS lookups are kept in memory; the packets also go to the recorder
- * (recordings on storage, UDP live export).
+ * Connections and DNS lookups are kept in memory and saved to the encrypted history
+ * database every few seconds; the packets go to the recorder (encrypted recordings).
  */
 object CaptureRepository {
     private const val MAX_DNS_EVENTS = 5_000
     private const val MAX_CONNECTIONS_SHOWN = 2_000
     private const val MAX_BUFFERED_BYTES = 64L * 1024 * 1024
     private const val SETTINGS_DEBOUNCE_MILLIS = 800L
+    private const val SAVE_INTERVAL_MILLIS = 10_000L
+
+    /** Flows seen this long before the last save are saved again (late nDPI results). */
+    private const val SAVE_OVERLAP_MICROS = 60_000_000L
 
     private val _status = MutableStateFlow(CaptureStatus())
     val status: StateFlow<CaptureStatus> = _status.asStateFlow()
@@ -79,14 +88,24 @@ object CaptureRepository {
 
     private lateinit var apps: AppResolver
     private lateinit var recorder: CaptureRecorder
-    private lateinit var recordingsDir: File
+    private lateinit var history: HistoryStore
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val lock = Any()
-    private val tracker = FlowTracker()
+
+    // Ids start at the current time in microseconds, so they never repeat those of
+    // connections and lookups stored by earlier runs.
+    private val tracker = FlowTracker(firstFlowId = System.currentTimeMillis() * 1000)
+    private val eventIds = AtomicLong(System.currentTimeMillis() * 1000)
+
     private val timeline = TrafficTimeline()
     private val packets = ArrayDeque<CaptureRecord>()
     private var bufferedBytes = 0L
-    private val eventIds = AtomicLong()
+
+    /** Connections of earlier runs, from the history database. */
+    private var storedConnections = emptyList<FlowInfo>()
+    private val unsavedLookups = ArrayList<StoredLookup>()
+    private var savedAtMillis = 0L
+    private var savedUpToMicros = 0L
 
     /** The connection list is stale because nobody watched it during the last batches. */
     @Volatile
@@ -98,9 +117,10 @@ object CaptureRepository {
         synchronized(this) {
             if (::apps.isInitialized) return
             apps = AppResolver(context)
-            recordingsDir = File(context.filesDir, "recordings")
-            recorder = CaptureRecorder(recordingsDir, ::packetComment)
+            recorder = CaptureRecorder(File(context.filesDir, "recordings"), { Keys.recordingCodec }, ::packetComment)
+            history = HistoryStore(context)
         }
+        scope.launch(Dispatchers.IO) { onHistoryLoaded(history.load(MAX_CONNECTIONS_SHOWN).get()) }
         // While the capture runs in the background nobody looks at the connection list, so
         // it is only built when a screen starts collecting it.
         scope.launch {
@@ -123,6 +143,7 @@ object CaptureRepository {
 
     fun onStopped(@StringRes errorRes: Int? = null) {
         recorder.stop()
+        synchronized(lock) { saveHistory(System.currentTimeMillis()) }
         _status.update {
             it.copy(
                 running = false,
@@ -158,6 +179,9 @@ object CaptureRepository {
             }
             if (_connections.subscriptionCount.value > 0) publishConnections() else connectionsStale = true
             _packetCount.value = packets.size
+            lookups.mapTo(unsavedLookups) { it.toStored() }
+            val now = System.currentTimeMillis()
+            if (now - savedAtMillis >= SAVE_INTERVAL_MILLIS) saveHistory(now)
         }
         recorder.submit(records)
         if (lookups.isNotEmpty()) {
@@ -199,7 +223,7 @@ object CaptureRepository {
     /** Saved recordings, newest first. Reads the storage. */
     fun recordings(): List<RecordingItem> {
         val active = recorder.status.value.recording
-        return Recordings.list(recordingsDir).map {
+        return recorder.list().get().map {
             RecordingItem(
                 name = it.name,
                 startMillis = it.startMillis,
@@ -212,33 +236,69 @@ object CaptureRepository {
         }
     }
 
-    /** Writes a recording as one PCAPNG file and closes [out]; null if it no longer exists. */
-    fun exportRecording(name: String, out: OutputStream): Long? {
+    /** Writes a recording, decrypted, as one PCAPNG file and closes [out]; null if it no longer exists. */
+    fun exportRecording(name: String, out: OutputStream): ExportResult? {
         out.buffered().use { buffered ->
-            val recording = recorder.finishedRecording(name).get() ?: return null
-            return Recordings.export(recording, buffered)
+            val (store, recording) = recorder.finishedRecording(name).get() ?: return null
+            return store.export(recording, buffered)
         }
     }
 
     fun deleteRecording(name: String): Boolean = recorder.delete(name).get()
 
-    /** Forgets the connections, lookups and packets in memory; recordings stay. */
+    /** Forgets the connections, lookups and packets, in memory and in the history; recordings stay. */
     fun clear() {
         synchronized(lock) {
             tracker.clear()
             timeline.clear()
             packets.clear()
             bufferedBytes = 0
+            storedConnections = emptyList()
+            unsavedLookups.clear()
             _connections.value = emptyList()
             connectionsStale = false
             _packetCount.value = 0
         }
         _dnsEvents.value = emptyList()
+        history.clear()
     }
 
-    /** Must hold [lock]. */
+    /** [clear] and delete every recording (a running capture starts a new one). */
+    fun eraseAll() {
+        clear()
+        recorder.deleteAll().get()
+    }
+
+    private fun onHistoryLoaded(loaded: History) {
+        synchronized(lock) {
+            storedConnections = loaded.connections
+            if (_connections.subscriptionCount.value > 0) publishConnections() else connectionsStale = true
+        }
+        val events = loaded.lookups.map { it.toEvent() }
+        _dnsEvents.update { current -> (current + events).distinctBy { it.id }.take(MAX_DNS_EVENTS) }
+    }
+
+    /** Hands the connections changed since the last save and the new lookups to the history. Must hold [lock]. */
+    private fun saveHistory(nowMillis: Long) {
+        val since = savedUpToMicros - SAVE_OVERLAP_MICROS
+        history.save(tracker.snapshot().filter { it.lastSeenMicros >= since }, unsavedLookups.toList())
+        unsavedLookups.clear()
+        savedAtMillis = nowMillis
+        savedUpToMicros = nowMillis * 1000
+    }
+
+    /** The live connections and those of earlier runs, most recent first. Must hold [lock]. */
     private fun publishConnections() {
-        _connections.value = tracker.snapshot(MAX_CONNECTIONS_SHOWN).map { Connection(it, apps.appInfo(it.uid)) }
+        val live = tracker.snapshot(MAX_CONNECTIONS_SHOWN)
+        val flows = if (storedConnections.isEmpty()) {
+            live
+        } else {
+            val liveIds = live.mapTo(HashSet()) { it.id }
+            (live + storedConnections.filter { it.id !in liveIds })
+                .sortedByDescending { it.lastSeenMicros }
+                .take(MAX_CONNECTIONS_SHOWN)
+        }
+        _connections.value = flows.map { Connection(it, apps.appInfo(it.uid)) }
         connectionsStale = false
     }
 
@@ -247,6 +307,28 @@ object CaptureRepository {
         val app = if (record.uid == CaptureBatch.UID_UNKNOWN) null else apps.appInfo(record.uid).describe()
         return if (record.blocked) listOfNotNull(app, "blocked").joinToString(" ") else app
     }
+
+    private fun DnsEvent.toStored() = StoredLookup(
+        id = id,
+        timestampMillis = timestampMillis,
+        uid = app.uid,
+        domain = domain,
+        queryType = queryType,
+        answers = answers,
+        rcode = rcode,
+        latencyMillis = latencyMillis,
+    )
+
+    private fun StoredLookup.toEvent() = DnsEvent(
+        id = id,
+        timestampMillis = timestampMillis,
+        app = apps.appInfo(uid),
+        domain = domain,
+        queryType = queryType,
+        answers = answers,
+        rcode = rcode,
+        latencyMillis = latencyMillis,
+    )
 
     private fun DnsLookup.toEvent() = DnsEvent(
         id = eventIds.incrementAndGet(),

@@ -6,6 +6,7 @@ import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 
 class PcapngWriterTest {
@@ -43,6 +44,14 @@ class PcapngWriterTest {
         val optionStart = 28 + ((packet.size + 3) and 3.inv())
         assertEquals(1, epb.getShort(optionStart).toInt())
         assertEquals("com.example.app".length, epb.getShort(optionStart + 2).toInt())
+    }
+
+    @Test
+    fun `writer output is header plus packet blocks`() {
+        val packet = ByteArray(21) { 1 }
+        val out = ByteArrayOutputStream()
+        PcapngWriter(out).use { it.writePacket(5L, packet, comment = "x") }
+        assertContentEquals(Pcapng.header() + Pcapng.packet(5L, packet, comment = "x"), out.toByteArray())
     }
 
     /** Splits a PCAPNG file into (type, block) pairs, checking the duplicated length fields. */

@@ -27,6 +27,9 @@ configurations[tools.implementationConfigurationName].extendsFrom(configurations
 
 dependencies {
     testImplementation(kotlin("test"))
+    // Recordings are encrypted with Tink in the app; tests and tools use the JVM build.
+    testImplementation(libs.tink.jvm)
+    "toolsImplementation"(libs.tink.jvm)
 }
 
 tasks.test {

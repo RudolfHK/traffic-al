@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -13,7 +14,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -41,8 +41,10 @@ import io.github.rudolfhk.traffical.core.analysis.Format
 import io.github.rudolfhk.traffical.core.analysis.TimeRange
 import io.github.rudolfhk.traffical.model.BackgroundInfo
 import io.github.rudolfhk.traffical.model.Connection
+import io.github.rudolfhk.traffical.model.PrivacyInfo
 import io.github.rudolfhk.traffical.model.RecorderStatus
 import io.github.rudolfhk.traffical.model.RecordingItem
+import io.github.rudolfhk.traffical.security.AppLock
 import io.github.rudolfhk.traffical.settings.SettingsStore
 import io.github.rudolfhk.traffical.ui.common.ConnectionDetailScreen
 import io.github.rudolfhk.traffical.ui.common.ConnectionsScreen
@@ -89,6 +91,8 @@ class MainActions(
     val requestBatteryExemption: () -> Unit,
     val openVpnSettings: () -> Unit,
     val backgroundInfo: () -> BackgroundInfo,
+    val biometricAvailable: () -> Boolean,
+    val authenticateBiometric: () -> Unit,
 )
 
 @Composable
@@ -125,111 +129,116 @@ fun MainScreen(actions: MainActions) {
     BackHandler(enabled = detail == null && showRecordings) { showRecordings = false }
     BackHandler(enabled = detail == null && !showRecordings && tab != Tab.DASHBOARD) { tab = Tab.DASHBOARD }
 
-    val text = rememberUiText()
-    CompositionLocalProvider(LocalUiText provides text) {
-        TrafficAlScaffold(
-            tab = tab,
-            onTabSelected = {
-                tab = it
-                detailId = null
-                showRecordings = false
-            },
-            title = when {
-                detail != null -> detail.app.label
-                showRecordings -> text.recordingsTitle
-                tab == Tab.CONNECTIONS -> text.tabConnections
-                tab == Tab.DNS -> text.tabDns
-                tab == Tab.SETTINGS -> text.tabSettings
-                else -> text.appName
-            },
-            onBack = when {
-                detail != null -> ({ detailId = null })
-                showRecordings -> ({ showRecordings = false })
-                else -> null
-            },
-        ) { padding ->
-            val modifier = Modifier.padding(padding)
-            when {
-                detail != null -> {
-                    var packets by remember(detail.flow.id, detail.flow.closed) {
-                        mutableStateOf<List<FlowPacket>?>(null)
-                    }
-                    LaunchedEffect(detail.flow.id, detail.flow.closed) {
-                        packets = withContext(Dispatchers.Default) { CaptureRepository.packetsOf(detail) }
-                    }
-                    ConnectionDetailScreen(detail, packets, modifier)
+    val text = LocalUiText.current
+    TrafficAlScaffold(
+        tab = tab,
+        onTabSelected = {
+            tab = it
+            detailId = null
+            showRecordings = false
+        },
+        title = when {
+            detail != null -> detail.app.label
+            showRecordings -> text.recordingsTitle
+            tab == Tab.CONNECTIONS -> text.tabConnections
+            tab == Tab.DNS -> text.tabDns
+            tab == Tab.SETTINGS -> text.tabSettings
+            else -> text.appName
+        },
+        onBack = when {
+            detail != null -> ({ detailId = null })
+            showRecordings -> ({ showRecordings = false })
+            else -> null
+        },
+    ) { padding ->
+        val modifier = Modifier.padding(padding)
+        when {
+            detail != null -> {
+                var packets by remember(detail.flow.id, detail.flow.closed) {
+                    mutableStateOf<List<FlowPacket>?>(null)
                 }
-                showRecordings -> {
-                    val scope = rememberCoroutineScope()
-                    var reload by remember { mutableIntStateOf(0) }
-                    val recordings = rememberRecordings(reload)
-                    RecordingsScreen(
-                        recordings = recordings,
-                        settings = settings,
-                        recorder = recorder,
-                        bufferPackets = packetCount,
-                        onExport = { actions.exportRecording(it.name) },
-                        onDelete = { recording ->
-                            scope.launch {
-                                withContext(Dispatchers.IO) { CaptureRepository.deleteRecording(recording.name) }
-                                reload++
-                            }
-                        },
-                        onExportBuffer = actions.exportBuffer,
-                        modifier = modifier,
-                    )
+                LaunchedEffect(detail.flow.id, detail.flow.closed) {
+                    packets = withContext(Dispatchers.Default) { CaptureRepository.packetsOf(detail) }
                 }
-                tab == Tab.DASHBOARD -> {
-                    val data = rememberDashboard(range)
-                    DashboardScreen(
-                        data = data,
-                        appInfo = CaptureRepository::appInfo,
-                        onRangeChange = { range = it },
-                        onAppClick = { uid ->
-                            filter = ConnectionFilter(uid = uid, timeRange = range)
-                            tab = Tab.CONNECTIONS
-                        },
-                        header = {
-                            StatusCard(
-                                status = status,
-                                recorder = recorder,
-                                connectionCount = connections.size,
-                                lookupCount = dnsEvents.size,
-                                packetCount = packetCount,
-                                actions = actions,
-                                onShowRecordings = { showRecordings = true },
-                            )
-                        },
-                        modifier = modifier,
-                    )
-                }
-                tab == Tab.CONNECTIONS -> {
-                    val nowMicros = remember(connections, filter.timeRange) { CaptureRepository.referenceMicros() }
-                    ConnectionsScreen(
-                        connections = connections,
-                        filter = filter,
-                        onFilterChange = { filter = it },
-                        onConnectionClick = { detailId = it.flow.id },
-                        nowMicros = nowMicros,
-                        modifier = modifier,
-                    )
-                }
-                tab == Tab.DNS -> DnsScreen(dnsEvents, dnsQuery, { dnsQuery = it }, modifier)
-                else -> {
-                    // Battery optimization can change in the system settings: reread on resume.
-                    val lifecycle = LocalLifecycleOwner.current.lifecycle
-                    val lifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()
-                    val background = remember(lifecycleState, status.alwaysOn) { actions.backgroundInfo() }
-                    SettingsScreen(
-                        settings = settings,
-                        background = background,
-                        recorder = recorder,
-                        onChange = SettingsStore::update,
-                        onRequestBatteryExemption = actions.requestBatteryExemption,
-                        onOpenVpnSettings = actions.openVpnSettings,
-                        modifier = modifier,
-                    )
-                }
+                ConnectionDetailScreen(detail, packets, modifier)
+            }
+            showRecordings -> {
+                val scope = rememberCoroutineScope()
+                var reload by remember { mutableIntStateOf(0) }
+                val recordings = rememberRecordings(reload)
+                RecordingsScreen(
+                    recordings = recordings,
+                    settings = settings,
+                    recorder = recorder,
+                    bufferPackets = packetCount,
+                    onExport = { actions.exportRecording(it.name) },
+                    onDelete = { recording ->
+                        scope.launch {
+                            withContext(Dispatchers.IO) { CaptureRepository.deleteRecording(recording.name) }
+                            reload++
+                        }
+                    },
+                    onExportBuffer = actions.exportBuffer,
+                    modifier = modifier,
+                )
+            }
+            tab == Tab.DASHBOARD -> {
+                val data = rememberDashboard(range)
+                DashboardScreen(
+                    data = data,
+                    appInfo = CaptureRepository::appInfo,
+                    onRangeChange = { range = it },
+                    onAppClick = { uid ->
+                        filter = ConnectionFilter(uid = uid, timeRange = range)
+                        tab = Tab.CONNECTIONS
+                    },
+                    header = {
+                        StatusCard(
+                            status = status,
+                            recorder = recorder,
+                            connectionCount = connections.size,
+                            lookupCount = dnsEvents.size,
+                            packetCount = packetCount,
+                            actions = actions,
+                            onShowRecordings = { showRecordings = true },
+                        )
+                    },
+                    modifier = modifier,
+                )
+            }
+            tab == Tab.CONNECTIONS -> {
+                val nowMicros = remember(connections, filter.timeRange) { CaptureRepository.referenceMicros() }
+                ConnectionsScreen(
+                    connections = connections,
+                    filter = filter,
+                    onFilterChange = { filter = it },
+                    onConnectionClick = { detailId = it.flow.id },
+                    nowMicros = nowMicros,
+                    modifier = modifier,
+                )
+            }
+            tab == Tab.DNS -> DnsScreen(dnsEvents, dnsQuery, { dnsQuery = it }, modifier)
+            else -> {
+                // Battery optimization can change in the system settings: reread on resume.
+                val lifecycle = LocalLifecycleOwner.current.lifecycle
+                val lifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()
+                val background = remember(lifecycleState, status.alwaysOn) { actions.backgroundInfo() }
+                val lock by AppLock.state.collectAsStateWithLifecycle()
+                val biometricAvailable = remember(lifecycleState) { actions.biometricAvailable() }
+                val scope = rememberCoroutineScope()
+                SettingsScreen(
+                    settings = settings,
+                    background = background,
+                    privacy = PrivacyInfo(lock.enabled, lock.biometric, biometricAvailable),
+                    onChange = SettingsStore::update,
+                    onRequestBatteryExemption = actions.requestBatteryExemption,
+                    onOpenVpnSettings = actions.openVpnSettings,
+                    onSetPin = { pin -> scope.launch(Dispatchers.Default) { AppLock.setPin(pin.toCharArray()) } },
+                    onDisableLock = AppLock::disable,
+                    onBiometricChange = AppLock::setBiometric,
+                    onEraseAll = { scope.launch(Dispatchers.IO) { CaptureRepository.eraseAll() } },
+                    modifier = modifier,
+                )
             }
         }
     }
@@ -280,6 +289,7 @@ private fun StatusCard(
     actions: MainActions,
     onShowRecordings: () -> Unit,
 ) {
+    var confirmClear by remember { mutableStateOf(false) }
     Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
@@ -321,11 +331,27 @@ private fun StatusCard(
                     Button(onClick = actions.start) { Text(stringResource(R.string.action_start)) }
                 }
                 OutlinedButton(onClick = onShowRecordings) { Text(stringResource(R.string.action_recordings)) }
-                TextButton(onClick = actions.clear, enabled = connectionCount > 0 || packetCount > 0) {
+                TextButton(onClick = { confirmClear = true }, enabled = connectionCount > 0 || packetCount > 0) {
                     Text(stringResource(R.string.action_clear))
                 }
             }
         }
+    }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text(stringResource(R.string.clear_confirm_title)) },
+            text = { Text(stringResource(R.string.clear_confirm_text)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmClear = false
+                        actions.clear()
+                    },
+                ) { Text(stringResource(R.string.action_clear)) }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(LocalUiText.current.actionCancel) } },
+        )
     }
 }
 
@@ -337,8 +363,6 @@ private fun RecorderLines(status: CaptureStatus, recorder: RecorderStatus) {
     val lines = listOfNotNull(
         recorder.recording?.let { stringResource(R.string.status_recording, Format.bytes(recorder.recordedBytes)) to false },
         recorder.storageError?.let { text.recorderError.format(it) to true },
-        recorder.udpTarget?.let { stringResource(R.string.status_streaming, it, recorder.udpPackets) to false },
-        recorder.udpError?.let { text.settingsUdpError.format(it) to true },
         if (status.alwaysOn) stringResource(R.string.status_always_on) to false else null,
     )
     for ((line, error) in lines) {

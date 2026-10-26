@@ -1,7 +1,6 @@
 package io.github.rudolfhk.traffical.model
 
 import io.github.rudolfhk.traffical.core.capture.FlowInfo
-import io.github.rudolfhk.traffical.core.export.StreamFormat
 
 // Platform-independent UI models: also compiled by tools/ui-preview (Compose Desktop).
 
@@ -32,10 +31,6 @@ data class AppSettings(
     val recordToStorage: Boolean = true,
     /** Megabytes of 1,000,000 bytes, like the sizes shown everywhere in the app. */
     val storageLimitMb: Int = 1000,
-    val udpExport: Boolean = false,
-    val udpHost: String = "",
-    val udpPort: Int = 1234,
-    val udpFormat: StreamFormat = StreamFormat.PCAP,
 ) {
     val storageLimitBytes: Long get() = storageLimitMb * 1_000_000L
 
@@ -49,13 +44,9 @@ data class RecorderStatus(
     /** Name of the recording being written. */
     val recording: String? = null,
     val recordedBytes: Long = 0,
-    /** "host:port" while streaming over UDP. */
-    val udpTarget: String? = null,
-    val udpPackets: Long = 0,
-    val udpError: String? = null,
     /** Saving stopped, e.g. because the storage is full. */
     val storageError: String? = null,
-    /** Packets not saved or sent because storage or network could not keep up. */
+    /** Packets not saved because the storage could not keep up. */
     val droppedPackets: Long = 0,
 )
 
@@ -78,4 +69,12 @@ data class BackgroundInfo(
     /** The capture runs as always-on VPN (known while it runs). */
     val alwaysOn: Boolean,
     val appVersion: String,
+)
+
+/** The app lock as the settings show it. */
+data class PrivacyInfo(
+    val lockEnabled: Boolean,
+    val biometric: Boolean,
+    /** A fingerprint (or other biometric) is set up on the phone. */
+    val biometricAvailable: Boolean,
 )

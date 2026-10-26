@@ -13,8 +13,8 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.text.format.Formatter
+import android.view.WindowManager
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -22,16 +22,26 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
+import androidx.biometric.BiometricPrompt
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import io.github.rudolfhk.traffical.capture.CaptureRepository
 import io.github.rudolfhk.traffical.model.BackgroundInfo
 import io.github.rudolfhk.traffical.model.ThemeMode
+import io.github.rudolfhk.traffical.security.AppLock
 import io.github.rudolfhk.traffical.settings.SettingsStore
+import io.github.rudolfhk.traffical.ui.LockGate
 import io.github.rudolfhk.traffical.ui.MainActions
 import io.github.rudolfhk.traffical.ui.MainScreen
 import io.github.rudolfhk.traffical.ui.TrafficAlTheme
+import io.github.rudolfhk.traffical.ui.common.LocalUiText
+import io.github.rudolfhk.traffical.ui.rememberUiText
 import io.github.rudolfhk.traffical.vpn.CaptureVpnService
 import io.github.rudolfhk.traffical.vpn.PrivateDns
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +52,8 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-class MainActivity : ComponentActivity() {
+/** A FragmentActivity because the fingerprint prompt (BiometricPrompt) needs one. */
+class MainActivity : FragmentActivity() {
 
     /** The recording whose export waits for the file picker; null exports the packets in memory. */
     private var pendingExport: String? = null
@@ -65,10 +76,21 @@ class MainActivity : ComponentActivity() {
             pendingExport = null
         }
 
+    private lateinit var biometricPrompt: BiometricPrompt
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingExport = savedInstanceState?.getString(STATE_PENDING_EXPORT)
         restorePrivateDnsAfterCrash()
+        biometricPrompt = BiometricPrompt(
+            this,
+            ContextCompat.getMainExecutor(this),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    AppLock.unlockWithBiometric()
+                }
+            },
+        )
         val actions = MainActions(
             start = ::requestStart,
             stop = ::stopCapture,
@@ -79,6 +101,8 @@ class MainActivity : ComponentActivity() {
             requestBatteryExemption = ::requestBatteryExemption,
             openVpnSettings = ::openVpnSettings,
             backgroundInfo = ::backgroundInfo,
+            biometricAvailable = ::biometricAvailable,
+            authenticateBiometric = ::authenticateBiometric,
         )
         setContent {
             val settings by SettingsStore.settings.collectAsStateWithLifecycle()
@@ -95,7 +119,21 @@ class MainActivity : ComponentActivity() {
                 )
                 onDispose {}
             }
-            TrafficAlTheme(dark) { MainScreen(actions) }
+            // While the app lock is on, the app's content stays out of screenshots and the
+            // recent apps overview.
+            val lock by AppLock.state.collectAsStateWithLifecycle()
+            LaunchedEffect(lock.enabled) {
+                if (lock.enabled) {
+                    window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                }
+            }
+            TrafficAlTheme(dark) {
+                CompositionLocalProvider(LocalUiText provides rememberUiText()) {
+                    if (lock.locked) LockGate(lock, actions) else MainScreen(actions)
+                }
+            }
         }
         if (savedInstanceState == null) handleStartRequest(intent)
     }
@@ -170,8 +208,13 @@ class MainActivity : ComponentActivity() {
                         if (recording == null) {
                             getString(R.string.export_done, CaptureRepository.exportPcapng(out))
                         } else {
-                            CaptureRepository.exportRecording(recording, out)?.let { bytes ->
-                                getString(R.string.export_recording_done, Formatter.formatShortFileSize(this@MainActivity, bytes))
+                            CaptureRepository.exportRecording(recording, out)?.let { result ->
+                                val size = Formatter.formatShortFileSize(this@MainActivity, result.bytes)
+                                if (result.damagedSegments == 0) {
+                                    getString(R.string.export_recording_done, result.packets, size)
+                                } else {
+                                    getString(R.string.export_recording_damaged, result.packets, size, result.damagedSegments)
+                                }
                             }
                         }
                     }
@@ -197,6 +240,20 @@ class MainActivity : ComponentActivity() {
         true
     } catch (_: ActivityNotFoundException) {
         false
+    }
+
+    private fun biometricAvailable(): Boolean =
+        BiometricManager.from(this).canAuthenticate(BIOMETRIC_WEAK) == BiometricManager.BIOMETRIC_SUCCESS
+
+    private fun authenticateBiometric() {
+        if (!biometricAvailable()) return
+        biometricPrompt.authenticate(
+            BiometricPrompt.PromptInfo.Builder()
+                .setTitle(getString(R.string.biometric_title))
+                .setNegativeButtonText(getString(R.string.biometric_use_pin))
+                .setAllowedAuthenticators(BIOMETRIC_WEAK)
+                .build(),
+        )
     }
 
     private fun backgroundInfo() = BackgroundInfo(

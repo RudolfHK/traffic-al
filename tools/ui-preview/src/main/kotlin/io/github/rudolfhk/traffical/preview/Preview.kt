@@ -23,13 +23,13 @@ import io.github.rudolfhk.traffical.core.analysis.TimeRange
 import io.github.rudolfhk.traffical.core.analysis.TrafficTimeline
 import io.github.rudolfhk.traffical.core.analysis.dashboard
 import io.github.rudolfhk.traffical.core.capture.Direction
-import io.github.rudolfhk.traffical.core.export.StreamFormat
 import io.github.rudolfhk.traffical.core.capture.FlowInfo
 import io.github.rudolfhk.traffical.core.packet.IpProtocol
 import io.github.rudolfhk.traffical.core.packet.TcpFlags
 import io.github.rudolfhk.traffical.model.AppInfo
 import io.github.rudolfhk.traffical.model.AppSettings
 import io.github.rudolfhk.traffical.model.BackgroundInfo
+import io.github.rudolfhk.traffical.model.PrivacyInfo
 import io.github.rudolfhk.traffical.model.RecorderStatus
 import io.github.rudolfhk.traffical.model.RecordingItem
 import io.github.rudolfhk.traffical.model.Connection
@@ -39,6 +39,8 @@ import io.github.rudolfhk.traffical.ui.common.ConnectionsScreen
 import io.github.rudolfhk.traffical.ui.common.DashboardScreen
 import io.github.rudolfhk.traffical.ui.common.DnsScreen
 import io.github.rudolfhk.traffical.ui.common.LocalUiText
+import io.github.rudolfhk.traffical.ui.common.LockScreen
+import io.github.rudolfhk.traffical.ui.common.LockScreenState
 import io.github.rudolfhk.traffical.ui.common.RecordingsScreen
 import io.github.rudolfhk.traffical.ui.common.SettingsScreen
 import io.github.rudolfhk.traffical.ui.common.Tab
@@ -110,15 +112,22 @@ fun main(args: Array<String>) {
             }
         }
         // Tall enough to show every setting.
-        render(if (dark) "settings-dark" else "settings", dark, height = 1500) {
+        render(if (dark) "lock-dark" else "lock", dark) {
+            LockScreen(LockScreenState(wrongPin = true), biometric = true, onUnlock = {}, onBiometric = {}, onErase = {})
+        }
+        render(if (dark) "settings-dark" else "settings", dark, height = 1560) {
             TrafficAlScaffold(Tab.SETTINGS, {}, text.tabSettings, onBack = null) { padding ->
                 SettingsScreen(
                     settings = sample.settings,
-                    background = BackgroundInfo(batteryOptimized = true, alwaysOn = false, appVersion = "0.5.0"),
-                    recorder = sample.recorder,
+                    background = BackgroundInfo(batteryOptimized = true, alwaysOn = false, appVersion = "0.6.0"),
+                    privacy = PrivacyInfo(lockEnabled = true, biometric = true, biometricAvailable = true),
                     onChange = {},
                     onRequestBatteryExemption = {},
                     onOpenVpnSettings = {},
+                    onSetPin = {},
+                    onDisableLock = {},
+                    onBiometricChange = {},
+                    onEraseAll = {},
                     modifier = Modifier.padding(padding),
                 )
             }
@@ -173,11 +182,6 @@ private fun SampleStatusCard() {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
             )
-            Text(
-                "Streaming to 192.168.1.20:1234: 48213 packets",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {}) { Text("Stop") }
                 OutlinedButton(onClick = {}) { Text("Recordings") }
@@ -208,13 +212,8 @@ private class Sample {
 
     fun app(uid: Int) = apps[uid] ?: AppInfo(uid, null, "uid $uid")
 
-    val settings = AppSettings(udpExport = true, udpHost = "192.168.1.20", udpFormat = StreamFormat.PCAPNG)
-    val recorder = RecorderStatus(
-        recording = "1793029200000",
-        recordedBytes = 312L shl 20,
-        udpTarget = "192.168.1.20:1234",
-        udpPackets = 48_213,
-    )
+    val settings = AppSettings()
+    val recorder = RecorderStatus(recording = "1793029200000", recordedBytes = 312L shl 20)
     private val nowMillis = now / 1000
     val recordings = listOf(
         RecordingItem("1793029200000", 1_793_029_200_000, nowMillis, 312L shl 20, 5, truncated = false, active = true),

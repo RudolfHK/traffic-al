@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Phase 5 check on the output of the exportCheck tool (see validate.sh): tshark must read
-the segmented recording, the size-limited recording and both UDP streams, with every
-packet, identical packet lengths, and the app comment where the format carries one."""
+"""Recording check on the output of the exportCheck tool (see validate.sh): tshark must
+read every exported recording without errors, with every packet, the same packet lengths
+and the app comment on each packet."""
 import json
 import subprocess
 import sys
@@ -35,7 +35,7 @@ def check(condition, message):
 
 packets = expected["packets"]
 lengths, comments = read("recording.pcapng", comments=True)
-check(len(lengths) == packets,
+check(len(lengths) == packets == expected["exported"],
       f"recording: {len(lengths)}/{packets} packets in {expected['segments']} segments")
 check(expected["segments"] > 1, "recording has several segments (one PCAPNG section each)")
 check(all(c.startswith("uid=") for c in comments), "recording: every packet has the app comment")
@@ -47,14 +47,16 @@ check(expected["limitedTruncated"] and 0 < len(limited) < packets,
       f"limited recording keeps the newest {len(limited)} of {packets} packets")
 check(limited == lengths[-len(limited):], "limited recording is the tail of the capture")
 
-udp_pcap, _ = read("udp.pcap")
-check(expected["udpPcap"] == packets and udp_pcap == lengths,
-      f"UDP PCAP stream: {len(udp_pcap)}/{packets} packets received, same lengths")
+encrypted, encrypted_comments = read("recording-encrypted.pcapng", comments=True)
+check(expected["encryptedDamaged"] == 0 and encrypted == lengths and encrypted_comments == comments,
+      f"encrypted recording: {len(encrypted)}/{packets} packets after decryption, same lengths and comments")
+ciphertext = b"".join(p.read_bytes() for p in sorted((out / "recordings-encrypted").rglob("*.enc")))
+check(b"traffic-al" not in ciphertext and b"uid=" not in ciphertext,
+      "encrypted segments contain no cleartext PCAPNG")
 
-udp_pcapng, udp_comments = read("udp.pcapng", comments=True)
-check(expected["udpPcapng"] == packets and udp_pcapng == lengths,
-      f"UDP PCAPNG stream: {len(udp_pcapng)}/{packets} packets received, same lengths")
-check(udp_comments == comments, "UDP PCAPNG stream carries the app comments")
+cut, _ = read("recording-cut.pcapng")
+check(expected["cutDamaged"] == 1 and 0 < len(cut) < packets and cut == lengths[:len(cut)],
+      f"recording cut off while writing: {len(cut)} complete packets exported, the file stays valid")
 
 for failure in failures:
     print("FAIL", failure)

@@ -2,7 +2,6 @@ package io.github.rudolfhk.traffical.settings
 
 import android.content.Context
 import android.content.SharedPreferences
-import io.github.rudolfhk.traffical.core.export.StreamFormat
 import io.github.rudolfhk.traffical.model.AppSettings
 import io.github.rudolfhk.traffical.model.ThemeMode
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,10 +15,6 @@ object SettingsStore {
     private const val START_ON_BOOT = "start_on_boot"
     private const val RECORD = "record_to_storage"
     private const val STORAGE_LIMIT_MB = "storage_limit_mb"
-    private const val UDP_EXPORT = "udp_export"
-    private const val UDP_HOST = "udp_host"
-    private const val UDP_PORT = "udp_port"
-    private const val UDP_FORMAT = "udp_format"
     private const val CAPTURE_WANTED = "capture_wanted"
 
     private lateinit var prefs: SharedPreferences
@@ -35,16 +30,12 @@ object SettingsStore {
     }
 
     fun update(transform: (AppSettings) -> AppSettings) = synchronized(this) {
-        val updated = transform(_settings.value).let { it.copy(udpPort = it.udpPort.coerceIn(1, 65535)) }
+        val updated = transform(_settings.value)
         prefs.edit()
             .putString(THEME, updated.theme.name)
             .putBoolean(START_ON_BOOT, updated.startOnBoot)
             .putBoolean(RECORD, updated.recordToStorage)
             .putInt(STORAGE_LIMIT_MB, updated.storageLimitMb)
-            .putBoolean(UDP_EXPORT, updated.udpExport)
-            .putString(UDP_HOST, updated.udpHost)
-            .putInt(UDP_PORT, updated.udpPort)
-            .putString(UDP_FORMAT, updated.udpFormat.name)
             .apply()
         _settings.value = updated
     }
@@ -66,10 +57,6 @@ object SettingsStore {
             startOnBoot = prefs.getBoolean(START_ON_BOOT, defaults.startOnBoot),
             recordToStorage = prefs.getBoolean(RECORD, defaults.recordToStorage),
             storageLimitMb = prefs.getInt(STORAGE_LIMIT_MB, defaults.storageLimitMb),
-            udpExport = prefs.getBoolean(UDP_EXPORT, defaults.udpExport),
-            udpHost = prefs.getString(UDP_HOST, null) ?: defaults.udpHost,
-            udpPort = prefs.getInt(UDP_PORT, defaults.udpPort),
-            udpFormat = enumOrNull<StreamFormat>(prefs.getString(UDP_FORMAT, null)) ?: defaults.udpFormat,
         )
     }
 

@@ -1,6 +1,8 @@
 package io.github.rudolfhk.traffical.core.pcap
 
 import java.io.Closeable
+import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -105,6 +107,61 @@ object Pcapng {
         return block.array()
     }
 
+    /** Result of [copyBlocks]. */
+    data class BlockCopy(val bytes: Long, val packets: Long, val complete: Boolean)
+
+    /**
+     * Copies whole blocks from [input] to [out] up to the end of [input]. Stops at a block
+     * that is cut off or malformed, or when reading fails (e.g. encrypted data that does not
+     * authenticate); [BlockCopy.complete] is false then. Write errors are thrown.
+     */
+    fun copyBlocks(input: InputStream, out: OutputStream): BlockCopy {
+        val reader = BlockReader(input)
+        var bytes = 0L
+        var packets = 0L
+        val header = ByteArray(8)
+        while (true) {
+            val read = reader.read(header, 0, header.size)
+            if (read < header.size) return BlockCopy(bytes, packets, complete = read == 0 && !reader.failed)
+            val fields = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
+            val type = fields.getInt(0)
+            val length = fields.getInt(4)
+            if (length < 12 || length % 4 != 0 || length > MAX_BLOCK_LENGTH) return BlockCopy(bytes, packets, complete = false)
+            val block = header.copyOf(length)
+            if (reader.read(block, header.size, length - header.size) < length - header.size) {
+                return BlockCopy(bytes, packets, complete = false)
+            }
+            if (ByteBuffer.wrap(block).order(ByteOrder.LITTLE_ENDIAN).getInt(length - 4) != length) {
+                return BlockCopy(bytes, packets, complete = false)
+            }
+            out.write(block)
+            bytes += length
+            if (type == BLOCK_ENHANCED_PACKET) packets++
+        }
+    }
+
+    /** Reads fully; a read error ends the input like the end of the stream, but is remembered. */
+    private class BlockReader(private val input: InputStream) {
+        var failed = false
+            private set
+
+        fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            var total = 0
+            try {
+                while (total < length) {
+                    val n = input.read(buffer, offset + total, length - total)
+                    if (n < 0) break
+                    total += n
+                }
+            } catch (e: IOException) {
+                failed = true
+            }
+            return total
+        }
+    }
+
+    private const val MAX_BLOCK_LENGTH = 1 shl 20
+
     private fun block(type: Int, bodyLength: Int): ByteBuffer {
         val total = 12 + bodyLength
         return ByteBuffer.allocate(total).order(ByteOrder.LITTLE_ENDIAN).apply {
@@ -137,42 +194,4 @@ object Pcapng {
     }
 
     private fun padded(length: Int) = (length + 3) and 3.inv()
-}
-
-/**
- * Classic PCAP (libpcap 2.4, little endian, [Pcapng.LINKTYPE_RAW]) as byte arrays, the
- * format of PCAPdroid's UDP exporter: [header] once, then one [record] per packet.
- */
-object Pcap {
-    const val HEADER_SIZE = 24
-    const val RECORD_HEADER_SIZE = 16
-    private const val MAGIC = 0xA1B2C3D4.toInt()
-
-    fun header(snapLength: Int = Pcapng.SNAP_LENGTH): ByteArray =
-        ByteBuffer.allocate(HEADER_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(MAGIC)
-            .putShort(2) // version 2.4
-            .putShort(4)
-            .putInt(0) // thiszone
-            .putInt(0) // sigfigs
-            .putInt(snapLength)
-            .putInt(Pcapng.LINKTYPE_RAW)
-            .array()
-
-    fun record(
-        timestampMicros: Long,
-        data: ByteArray,
-        offset: Int = 0,
-        length: Int = data.size - offset,
-        snapLength: Int = Pcapng.SNAP_LENGTH,
-    ): ByteArray {
-        val captured = minOf(length, snapLength)
-        return ByteBuffer.allocate(RECORD_HEADER_SIZE + captured).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(Math.floorDiv(timestampMicros, 1_000_000L).toInt())
-            .putInt(Math.floorMod(timestampMicros, 1_000_000L).toInt())
-            .putInt(captured)
-            .putInt(length)
-            .put(data, offset, captured)
-            .array()
-    }
 }

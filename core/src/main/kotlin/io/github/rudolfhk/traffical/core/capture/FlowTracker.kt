@@ -67,6 +67,8 @@ data class DnsLookup(
 class FlowTracker(
     private val maxFlows: Int = 10_000,
     private val maxDomainMappings: Int = 50_000,
+    /** Ids continue from here, also after [clear], so they stay unique in stored history. */
+    firstFlowId: Long = 1L,
 ) {
     private data class FlowKey(
         val ipVersion: Int,
@@ -118,7 +120,7 @@ class FlowTracker(
             size > maxDomainMappings
     }
     private val pendingQueries = LinkedHashMap<PendingKey, PendingQuery>()
-    private var nextFlowId = 1L
+    private var nextFlowId = firstFlowId
 
     /** Processes one capture entry. Returns the DNS lookup a packet completed, if any. */
     fun process(entry: CaptureEntry): DnsLookup? = when (entry) {

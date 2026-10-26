@@ -1,82 +1,91 @@
 package io.github.rudolfhk.traffical.core.tools
 
+import com.google.crypto.tink.KeyTemplates
+import com.google.crypto.tink.KeysetHandle
+import com.google.crypto.tink.StreamingAead
+import com.google.crypto.tink.streamingaead.StreamingAeadConfig
 import io.github.rudolfhk.traffical.core.capture.CaptureBatch
 import io.github.rudolfhk.traffical.core.capture.CaptureRecord
-import io.github.rudolfhk.traffical.core.export.StreamFormat
-import io.github.rudolfhk.traffical.core.export.UdpExporter
-import io.github.rudolfhk.traffical.core.recording.Recording
-import io.github.rudolfhk.traffical.core.recording.RecordingWriter
-import io.github.rudolfhk.traffical.core.recording.Recordings
+import io.github.rudolfhk.traffical.core.recording.ExportResult
+import io.github.rudolfhk.traffical.core.recording.RecordingStore
+import io.github.rudolfhk.traffical.core.recording.SegmentCodec
 import java.io.File
-import java.net.InetSocketAddress
+import java.io.InputStream
+import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.nio.ByteOrder
 import kotlin.system.exitProcess
 
 /**
- * Writes the packets of a host-test capture the way the app does during a capture:
- * - as a recording with small segments, exported to `recording.pcapng`;
- * - as a recording with a storage limit that forces deleting old segments, exported to
- *   `recording-limited.pcapng`;
- * - over UDP as PCAP to [pcapTarget] and as PCAPNG to [pcapngTarget].
- * tools/host-test/validate_export.py then checks all of it with tshark.
+ * Writes the packets of a host-test capture the way the app records them, and exports
+ * each recording to a PCAPNG file for tools/host-test/validate_export.py:
+ * - `recording.pcapng`: unencrypted, in small segments;
+ * - `recording-limited.pcapng`: with a storage limit that forces deleting old segments;
+ * - `recording-encrypted.pcapng`: encrypted like in the app (Tink streaming AEAD);
+ * - `recording-cut.pcapng`: the encrypted recording with its last segment cut off, as
+ *   when the capture is killed while writing.
  *
- * Usage: exportCheck <batches.bin> <out dir> <pcap host:port> <pcapng host:port>
+ * Usage: exportCheck <batches.bin> <out dir>
  */
 fun main(args: Array<String>) {
-    if (args.size != 4) {
-        System.err.println("Usage: exportCheck <batches.bin> <out dir> <pcap host:port> <pcapng host:port>")
+    if (args.size != 2) {
+        System.err.println("Usage: exportCheck <batches.bin> <out dir>")
         exitProcess(2)
     }
     val records = CaptureBatch.decode(File(args[0]).readBytes(), ByteOrder.LITTLE_ENDIAN).filterIsInstance<CaptureRecord>()
     val out = File(args[1]).apply { mkdirs() }
-    fun comment(record: CaptureRecord) = "uid=${record.uid} app=test"
 
-    val full = record(File(out, "recordings"), records, maxTotalBytes = Long.MAX_VALUE / 2, segmentBytes = SEGMENT_BYTES, ::comment)
-    File(out, "recording.pcapng").outputStream().use { Recordings.export(full, it) }
+    val full = record(RecordingStore(File(out, "recordings"), SegmentCodec.Plain), records, Long.MAX_VALUE / 2)
+    val fullResult = export(full, File(out, "recording.pcapng"))
 
-    val limited = record(File(out, "recordings-limited"), records, LIMIT_BYTES, SEGMENT_BYTES, ::comment)
-    File(out, "recording-limited.pcapng").outputStream().use { Recordings.export(limited, it) }
+    val limited = record(RecordingStore(File(out, "recordings-limited"), SegmentCodec.Plain), records, LIMIT_BYTES)
+    val limitedRecording = limited.list().single()
+    export(limited, File(out, "recording-limited.pcapng"))
 
-    val sent = listOf(args[2] to StreamFormat.PCAP, args[3] to StreamFormat.PCAPNG).map { (target, format) ->
-        UdpExporter(address(target), format).use { exporter ->
-            records.forEachIndexed { i, record ->
-                exporter.send(record.timestampMicros, record.packet, comment(record))
-                // The capture is replayed much faster than it happened: give the receiver time.
-                if (i % PACE_PACKETS == 0) Thread.sleep(1)
-            }
-            check(exporter.errors == 0L) { "UDP send errors: ${exporter.lastError}" }
-            exporter.packets
-        }
-    }
+    val encrypted = record(RecordingStore(File(out, "recordings-encrypted"), TinkCodec(newStreamingAead())), records, Long.MAX_VALUE / 2)
+    val encryptedResult = export(encrypted, File(out, "recording-encrypted.pcapng"))
+    val segments = encrypted.list().single().segments
+    RandomAccessFile(segments.last(), "rw").use { it.setLength(it.length() * 2 / 3) }
+    val cutResult = export(encrypted, File(out, "recording-cut.pcapng"))
 
     File(out, "export.json").writeText(
-        """{"packets": ${records.size}, "segments": ${full.segments.size}, "limitBytes": $LIMIT_BYTES, """ +
-            """"limitedSegments": ${limited.segments.size}, "limitedTruncated": ${limited.truncated}, """ +
-            """"udpPcap": ${sent[0]}, "udpPcapng": ${sent[1]}}""" + "\n",
+        """{"packets": ${records.size}, "segments": ${segments.size}, "limitBytes": $LIMIT_BYTES, """ +
+            """"limitedSegments": ${limitedRecording.segments.size}, "limitedTruncated": ${limitedRecording.truncated}, """ +
+            """"exported": ${fullResult.packets}, "encryptedExported": ${encryptedResult.packets}, """ +
+            """"encryptedDamaged": ${encryptedResult.damagedSegments}, "cutExported": ${cutResult.packets}, """ +
+            """"cutDamaged": ${cutResult.damagedSegments}}""" + "\n",
     )
     println(
-        "${records.size} packets: recording of ${full.segments.size} segments, limited recording of " +
-            "${limited.segments.size} segments (${limited.bytes} bytes), ${sent[0]} + ${sent[1]} sent over UDP",
+        "${records.size} packets: recording of ${segments.size} segments, limited recording of " +
+            "${limitedRecording.segments.size} segments (${limitedRecording.bytes} bytes), encrypted export " +
+            "${encryptedResult.packets} packets, cut-off export ${cutResult.packets} packets",
     )
 }
 
 private const val SEGMENT_BYTES = 4L * 1024 * 1024
 private const val LIMIT_BYTES = 20L * 1024 * 1024
-private const val PACE_PACKETS = 20
 
-private fun record(
-    root: File,
-    records: List<CaptureRecord>,
-    maxTotalBytes: Long,
-    segmentBytes: Long,
-    comment: (CaptureRecord) -> String,
-): Recording {
-    root.deleteRecursively()
-    RecordingWriter(root, startMillis = records.first().timestampMicros / 1000, maxTotalBytes, segmentBytes).use { writer ->
-        for (record in records) writer.write(record.timestampMicros, record.packet, comment(record))
-    }
-    return Recordings.list(root).single()
+private class TinkCodec(private val aead: StreamingAead) : SegmentCodec {
+    override val suffix = ".enc"
+    override fun encrypting(out: OutputStream, associatedData: ByteArray): OutputStream =
+        aead.newEncryptingStream(out, associatedData)
+    override fun decrypting(input: InputStream, associatedData: ByteArray): InputStream =
+        aead.newDecryptingStream(input, associatedData)
 }
 
-private fun address(target: String): InetSocketAddress =
-    InetSocketAddress(target.substringBeforeLast(':'), target.substringAfterLast(':').toInt())
+private fun newStreamingAead(): StreamingAead {
+    StreamingAeadConfig.register()
+    @Suppress("DEPRECATION")
+    return KeysetHandle.generateNew(KeyTemplates.get("AES256_GCM_HKDF_4KB")).getPrimitive(StreamingAead::class.java)
+}
+
+private fun record(store: RecordingStore, records: List<CaptureRecord>, maxTotalBytes: Long): RecordingStore {
+    store.root.deleteRecursively()
+    store.writer(startMillis = records.first().timestampMicros / 1000, maxTotalBytes, SEGMENT_BYTES).use { writer ->
+        for (record in records) writer.write(record.timestampMicros, record.packet, "uid=${record.uid} app=test")
+    }
+    return store
+}
+
+private fun export(store: RecordingStore, file: File): ExportResult =
+    file.outputStream().buffered().use { store.export(store.list().single(), it) }
