@@ -68,6 +68,13 @@ EXPECTED=$(printf '{"blob": "%s", "small": "%s"}' \
 status=0
 ip netns exec "$CLI" python3 "$HERE/client.py" "$EXPECTED" || status=$?
 
+echo "== kernel counters"
+ip -n "$CLI" -s link show tal0 | sed -n '/RX:/,+1p'
+echo "app side:"
+ip netns exec "$CLI" nstat -az TcpExtTCPOFODrop TcpExtTCPRcvQDrop TcpExtTCPZeroWindowDrop TcpExtTCPBacklogDrop | tail -n +2
+echo "server side:"
+ip netns exec "$SRV" nstat -az TcpExtListenOverflows TcpExtListenDrops | tail -n +2
+
 echo "== stop"
 kill -TERM "$CAP_PID"
 wait "$CAP_PID" || status=$?

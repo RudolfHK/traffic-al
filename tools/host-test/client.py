@@ -2,6 +2,7 @@
 import concurrent.futures
 import hashlib
 import json
+import os
 import socket
 import struct
 import sys
@@ -73,9 +74,18 @@ check("download_through_tun", hashlib.sha256(body).hexdigest() == EXPECTED["blob
 body, direct_mbps = timed_download(PROTECT_MARK)
 check("download_direct", hashlib.sha256(body).hexdigest() == EXPECTED["blob"], f"{direct_mbps:.0f} Mbit/s")
 
+def small_download(_):
+    try:
+        return hashlib.sha256(http_get("small")).hexdigest()
+    except OSError as e:
+        return type(e).__name__
+
+
+rounds = int(os.environ.get("PARALLEL_ROUNDS", "1"))
 with concurrent.futures.ThreadPoolExecutor(max_workers=40) as pool:
-    hashes = list(pool.map(lambda _: hashlib.sha256(http_get("small")).hexdigest(), range(80)))
-check("parallel_downloads", all(h == EXPECTED["small"] for h in hashes), f"{len(hashes)} requests")
+    hashes = list(pool.map(small_download, range(80 * rounds)))
+bad = [h for h in hashes if h != EXPECTED["small"]]
+check("parallel_downloads", not bad, f"{len(hashes)} requests, {len(bad)} failed {sorted(set(bad))}")
 
 try:
     socket.create_connection((SERVER, 853), timeout=2).close()

@@ -51,9 +51,19 @@ class DotListener(socketserver.BaseRequestHandler):
             f.write("connection\n")
 
 
+# socketserver listens with a backlog of 5 by default; the client opens 40 connections
+# at once, and accept-queue overflows then cost SYN-ACK retransmissions of seconds.
+BACKLOG = 512
+
+
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = BACKLOG
+
+
+class HttpServer(http.server.ThreadingHTTPServer):
+    request_queue_size = BACKLOG
 
 
 threading.Thread(target=udp_dns, daemon=True).start()
@@ -63,4 +73,4 @@ threading.Thread(target=Server((ADDR, 853), DotListener).serve_forever, daemon=T
 os.chdir(WEBROOT)
 handler = http.server.SimpleHTTPRequestHandler
 handler.log_message = lambda *args: None
-http.server.ThreadingHTTPServer((ADDR, 8080), handler).serve_forever()
+HttpServer((ADDR, 8080), handler).serve_forever()
