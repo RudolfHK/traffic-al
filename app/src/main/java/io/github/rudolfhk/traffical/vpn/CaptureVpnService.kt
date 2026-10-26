@@ -25,6 +25,7 @@ import io.github.rudolfhk.traffical.capture.AppResolver
 import io.github.rudolfhk.traffical.capture.CaptureRepository
 import io.github.rudolfhk.traffical.core.capture.CaptureBatch
 import io.github.rudolfhk.traffical.core.packet.IpProtocol
+import io.github.rudolfhk.traffical.settings.SettingsStore
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
@@ -36,6 +37,11 @@ import java.util.concurrent.Executors
  * interface. The native engine (zdtun) forwards every connection unchanged over normal
  * sockets and reports each packet, which the repository turns into connections and
  * DNS lookups.
+ *
+ * The capture runs in the background until the user stops it: with the app closed, after
+ * the system killed the process (START_STICKY), as always-on VPN (started by the system)
+ * and, if enabled, from boot. Its notification is silent and has no status-bar icon;
+ * Android's own VPN key icon stays.
  */
 class CaptureVpnService : VpnService() {
 
@@ -55,22 +61,28 @@ class CaptureVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
-        CaptureRepository.init(this)
         apps = AppResolver(this)
         privateDns = PrivateDns(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP -> stopCapture()
+            ACTION_STOP -> {
+                SettingsStore.captureWanted = false
+                stopCapture()
+            }
             ACTION_SWITCH_PRIVATE_DNS -> switchPrivateDnsToAutomatic()
+            // Restarted by the system after it killed the process.
+            null -> if (SettingsStore.captureWanted) startCapture() else stopSelf(startId)
+            // ACTION_START, or SERVICE_INTERFACE when Android starts the always-on VPN.
             else -> startCapture()
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onRevoke() {
-        // Another VPN took over or the user revoked the permission.
+        // Another VPN took over or the user revoked the permission: don't come back.
+        SettingsStore.captureWanted = false
         stopCapture()
     }
 
@@ -101,7 +113,8 @@ class CaptureVpnService : VpnService() {
             return
         }
         engine.setDns(VPN_DNS, upstreamDns(link))
-        CaptureRepository.onStarted()
+        SettingsStore.captureWanted = true
+        CaptureRepository.onStarted(alwaysOn = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isAlwaysOn)
         applyPrivateDnsMode(engine, link)
 
         tun = pfd
@@ -173,6 +186,7 @@ class CaptureVpnService : VpnService() {
     }
 
     private fun fail(@StringRes message: Int) {
+        SettingsStore.captureWanted = false
         CaptureRepository.onStopped(message)
         stopCapture()
     }
@@ -253,10 +267,18 @@ class CaptureVpnService : VpnService() {
             (address.address[0].toInt() and 0xfe) != 0xfc // not a unique local address
     }
 
+    /**
+     * A foreground service keeps the capture alive in the background. Its channel has the
+     * lowest importance: no sound, no status-bar icon, folded away in the shade.
+     */
     private fun showForegroundNotification() {
         val notifications = getSystemService(NotificationManager::class.java)
+        notifications.deleteNotificationChannel(OLD_CHANNEL_ID)
         notifications.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, getString(R.string.notification_channel), NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(CHANNEL_ID, getString(R.string.notification_channel), NotificationManager.IMPORTANCE_MIN).apply {
+                setShowBadge(false)
+                lockscreenVisibility = Notification.VISIBILITY_SECRET
+            },
         )
         val stopIntent = PendingIntent.getService(
             this,
@@ -270,6 +292,11 @@ class CaptureVpnService : VpnService() {
             .setContentText(getString(R.string.notification_text))
             .setContentIntent(openAppIntent())
             .setOngoing(true)
+            .setSilent(true)
+            .setShowWhen(false)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .addAction(0, getString(R.string.action_stop), stopIntent)
             .build()
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -277,7 +304,13 @@ class CaptureVpnService : VpnService() {
         } else {
             0
         }
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
+        try {
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
+        } catch (e: IllegalStateException) {
+            // Android 12+ may refuse a foreground start from the background (e.g. a sticky
+            // restart). The VPN still runs: the system keeps a VPN service bound.
+            Log.w(TAG, "capture runs without a foreground notification", e)
+        }
     }
 
     private fun openAppIntent(): PendingIntent = PendingIntent.getActivity(
@@ -302,7 +335,8 @@ class CaptureVpnService : VpnService() {
         // Only used if the underlying network reports no usable DNS server.
         private const val FALLBACK_DNS = "9.9.9.9"
 
-        private const val CHANNEL_ID = "capture"
+        private const val CHANNEL_ID = "capture_silent"
+        private const val OLD_CHANNEL_ID = "capture"
         private const val NOTIFICATION_ID = 1
     }
 }

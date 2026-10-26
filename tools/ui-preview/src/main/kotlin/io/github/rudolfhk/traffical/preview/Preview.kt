@@ -10,8 +10,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.ImageComposeScene
@@ -24,10 +23,15 @@ import io.github.rudolfhk.traffical.core.analysis.TimeRange
 import io.github.rudolfhk.traffical.core.analysis.TrafficTimeline
 import io.github.rudolfhk.traffical.core.analysis.dashboard
 import io.github.rudolfhk.traffical.core.capture.Direction
+import io.github.rudolfhk.traffical.core.export.StreamFormat
 import io.github.rudolfhk.traffical.core.capture.FlowInfo
 import io.github.rudolfhk.traffical.core.packet.IpProtocol
 import io.github.rudolfhk.traffical.core.packet.TcpFlags
 import io.github.rudolfhk.traffical.model.AppInfo
+import io.github.rudolfhk.traffical.model.AppSettings
+import io.github.rudolfhk.traffical.model.BackgroundInfo
+import io.github.rudolfhk.traffical.model.RecorderStatus
+import io.github.rudolfhk.traffical.model.RecordingItem
 import io.github.rudolfhk.traffical.model.Connection
 import io.github.rudolfhk.traffical.model.DnsEvent
 import io.github.rudolfhk.traffical.ui.common.ConnectionDetailScreen
@@ -35,9 +39,12 @@ import io.github.rudolfhk.traffical.ui.common.ConnectionsScreen
 import io.github.rudolfhk.traffical.ui.common.DashboardScreen
 import io.github.rudolfhk.traffical.ui.common.DnsScreen
 import io.github.rudolfhk.traffical.ui.common.LocalUiText
+import io.github.rudolfhk.traffical.ui.common.RecordingsScreen
+import io.github.rudolfhk.traffical.ui.common.SettingsScreen
 import io.github.rudolfhk.traffical.ui.common.Tab
 import io.github.rudolfhk.traffical.ui.common.TrafficAlScaffold
 import io.github.rudolfhk.traffical.ui.common.UiText
+import io.github.rudolfhk.traffical.ui.common.trafficAlColorScheme
 import org.jetbrains.skia.EncodedImageFormat
 import java.io.File
 import java.net.InetAddress
@@ -51,9 +58,9 @@ fun main(args: Array<String>) {
     val text = loadUiText(File(args[1]))
     val sample = Sample()
 
-    fun render(name: String, dark: Boolean = false, content: @Composable () -> Unit) {
-        val scene = ImageComposeScene(width = 412 * 2, height = 892 * 2, density = Density(2f)) {
-            MaterialTheme(colorScheme = if (dark) darkColorScheme() else lightColorScheme()) {
+    fun render(name: String, dark: Boolean = false, height: Int = 892, content: @Composable () -> Unit) {
+        val scene = ImageComposeScene(width = 412 * 2, height = height * 2, density = Density(2f)) {
+            MaterialTheme(colorScheme = trafficAlColorScheme(dark)) {
                 CompositionLocalProvider(LocalUiText provides text) {
                     Surface { content() }
                 }
@@ -96,9 +103,39 @@ fun main(args: Array<String>) {
             )
         }
     }
-    render("connection-detail") {
-        TrafficAlScaffold(Tab.CONNECTIONS, {}, sample.tracker.app.label, onBack = {}) { padding ->
-            ConnectionDetailScreen(sample.tracker, sample.trackerPackets, Modifier.padding(padding))
+    for (dark in listOf(false, true)) {
+        render(if (dark) "connection-detail-dark" else "connection-detail", dark) {
+            TrafficAlScaffold(Tab.CONNECTIONS, {}, sample.tracker.app.label, onBack = {}) { padding ->
+                ConnectionDetailScreen(sample.tracker, sample.trackerPackets, Modifier.padding(padding))
+            }
+        }
+        // Tall enough to show every setting.
+        render(if (dark) "settings-dark" else "settings", dark, height = 1500) {
+            TrafficAlScaffold(Tab.SETTINGS, {}, text.tabSettings, onBack = null) { padding ->
+                SettingsScreen(
+                    settings = sample.settings,
+                    background = BackgroundInfo(batteryOptimized = true, alwaysOn = false, appVersion = "0.5.0"),
+                    recorder = sample.recorder,
+                    onChange = {},
+                    onRequestBatteryExemption = {},
+                    onOpenVpnSettings = {},
+                    modifier = Modifier.padding(padding),
+                )
+            }
+        }
+    }
+    render("recordings") {
+        TrafficAlScaffold(Tab.DASHBOARD, {}, text.recordingsTitle, onBack = {}) { padding ->
+            RecordingsScreen(
+                recordings = sample.recordings,
+                settings = sample.settings,
+                recorder = sample.recorder,
+                bufferPackets = 48_213,
+                onExport = {},
+                onDelete = {},
+                onExportBuffer = {},
+                modifier = Modifier.padding(padding),
+            )
         }
     }
     render("dns") {
@@ -125,14 +162,26 @@ private fun loadUiText(stringsXml: File): UiText {
     )
 }
 
+/** Stand-in for the app's status card (MainScreen.kt), which uses Android resources. */
 @Composable
 private fun SampleStatusCard() {
     Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
         androidx.compose.foundation.layout.Column(Modifier.padding(12.dp)) {
             Text("Capturing all traffic", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Saving to storage: 312 MB",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                "Streaming to 192.168.1.20:1234: 48213 packets",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {}) { Text("Stop") }
-                OutlinedButton(onClick = {}) { Text("Export PCAPNG") }
+                OutlinedButton(onClick = {}) { Text("Recordings") }
+                TextButton(onClick = {}) { Text("Clear") }
             }
         }
     }
@@ -158,6 +207,20 @@ private class Sample {
     )
 
     fun app(uid: Int) = apps[uid] ?: AppInfo(uid, null, "uid $uid")
+
+    val settings = AppSettings(udpExport = true, udpHost = "192.168.1.20", udpFormat = StreamFormat.PCAPNG)
+    val recorder = RecorderStatus(
+        recording = "1793029200000",
+        recordedBytes = 312L shl 20,
+        udpTarget = "192.168.1.20:1234",
+        udpPackets = 48_213,
+    )
+    private val nowMillis = now / 1000
+    val recordings = listOf(
+        RecordingItem("1793029200000", 1_793_029_200_000, nowMillis, 312L shl 20, 5, truncated = false, active = true),
+        RecordingItem("1792990800000", 1_792_990_800_000, 1_793_011_380_000, 590L shl 20, 10, truncated = true, active = false),
+        RecordingItem("1792940400000", 1_792_940_400_000, 1_792_942_215_000, 18L shl 20, 1, truncated = false, active = false),
+    )
 
     private var nextId = 1L
     private val local = InetAddress.getByName("10.215.173.1")

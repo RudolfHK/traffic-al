@@ -38,3 +38,9 @@ tasks.register<JavaExec>("captureReport") {
     classpath = tools.runtimeClasspath
     mainClass.set("io.github.rudolfhk.traffical.core.tools.CaptureReportKt")
 }
+
+tasks.register<JavaExec>("exportCheck") {
+    description = "Writes a host-test capture as recordings and UDP streams (see tools/host-test)."
+    classpath = tools.runtimeClasspath
+    mainClass.set("io.github.rudolfhk.traffical.core.tools.ExportCheckKt")
+}

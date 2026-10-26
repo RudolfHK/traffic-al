@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -45,7 +46,7 @@ import io.github.rudolfhk.traffical.core.analysis.FlowFlag
 import io.github.rudolfhk.traffical.core.analysis.TimeRange
 import io.github.rudolfhk.traffical.core.analysis.TrafficPoint
 
-enum class Tab { DASHBOARD, CONNECTIONS, DNS }
+enum class Tab { DASHBOARD, CONNECTIONS, DNS, SETTINGS }
 
 /** App frame: top bar (with back navigation for detail screens) and bottom navigation. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -90,6 +91,12 @@ fun TrafficAlScaffold(
                     onClick = { onTabSelected(Tab.DNS) },
                     icon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     label = { Text(text.tabDns) },
+                )
+                NavigationBarItem(
+                    selected = tab == Tab.SETTINGS,
+                    onClick = { onTabSelected(Tab.SETTINGS) },
+                    icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                    label = { Text(text.tabSettings) },
                 )
             }
         },
@@ -236,16 +243,20 @@ fun flagColor(flag: FlowFlag): Color = when (flag) {
 fun FlagBadges(flags: Set<FlowFlag>, modifier: Modifier = Modifier) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         for (flag in FlowFlag.values()) {
-            if (flag !in flags) continue
-            val color = flagColor(flag)
-            Surface(color = color.copy(alpha = 0.14f), contentColor = color, shape = RoundedCornerShape(4.dp)) {
-                Text(
-                    text = flagLabel(flag),
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
-                    maxLines = 1,
-                )
-            }
+            if (flag in flags) LabelBadge(flagLabel(flag), flagColor(flag))
         }
+    }
+}
+
+/** Small tinted label, e.g. "tracker" or "recording". */
+@Composable
+fun LabelBadge(label: String, color: Color) {
+    Surface(color = color.copy(alpha = 0.14f), contentColor = color, shape = RoundedCornerShape(4.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+            maxLines = 1,
+        )
     }
 }

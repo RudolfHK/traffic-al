@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Background capture: start at boot (if enabled in the settings) and ask to be
+         exempted from battery optimization. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Optional, granted via adb (never by the user in the UI): lets the app switch strict
          Private DNS to automatic during a capture. Root works as an alternative. -->
     <uses-permission
@@ -18,6 +22,7 @@
         tools:ignore="QueryAllPackagesPermission" />
 
     <application
+        android:name=".TrafficAlApp"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -45,5 +50,26 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Local on-device VPN that records this device's own network traffic for a privacy audit" />
         </service>
+
+        <service
+            android:name=".background.CaptureTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_capture"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- Exported for the system's protected broadcasts only. -->
+        <receiver
+            android:name=".background.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

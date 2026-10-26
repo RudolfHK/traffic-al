@@ -3,8 +3,8 @@ package io.github.rudolfhk.traffical.ui.common
 import androidx.compose.runtime.staticCompositionLocalOf
 
 /**
- * The strings of the shared screens. The app fills it from its string resources
- * (English/German); tools/ui-preview from values/strings.xml, mapping each property to
+ * The strings of the shared screens. The app fills it from its string resources;
+ * tools/ui-preview from values/strings.xml, mapping each property to
  * the resource of the same name in snake_case (tabDashboard -> tab_dashboard). Values
  * with %1$d etc. are format strings.
  */
@@ -63,6 +63,58 @@ data class UiText(
     val detailPayload: String,
     val detailEncryptedHint: String,
     val dnsEmpty: String,
+    val tabSettings: String,
+    val actionExport: String,
+    val actionDelete: String,
+    val actionCancel: String,
+    val settingsAppearance: String,
+    val settingsTheme: String,
+    val themeSystem: String,
+    val themeLight: String,
+    val themeDark: String,
+    val settingsBackground: String,
+    val settingsStartOnBoot: String,
+    val settingsStartOnBootHint: String,
+    val settingsBattery: String,
+    val settingsBatteryOn: String,
+    val settingsBatteryOff: String,
+    val settingsBatteryAction: String,
+    val settingsAlwaysOn: String,
+    val settingsAlwaysOnActive: String,
+    val settingsAlwaysOnHint: String,
+    val settingsAlwaysOnAction: String,
+    val settingsHuaweiHint: String,
+    val settingsRecording: String,
+    val settingsRecordToStorage: String,
+    val settingsRecordToStorageHint: String,
+    val settingsStorageLimit: String,
+    val settingsStorageLimitHint: String,
+    val settingsUdp: String,
+    val settingsUdpEnabled: String,
+    val settingsUdpHost: String,
+    val settingsUdpPort: String,
+    val settingsUdpFormat: String,
+    val formatPcap: String,
+    val formatPcapng: String,
+    val settingsUdpHint: String,
+    val settingsUdpStatus: String,
+    val settingsUdpError: String,
+    val settingsAbout: String,
+    val settingsVersion: String,
+    val recordingsTitle: String,
+    val recordingsSaved: String,
+    val recordingsStorage: String,
+    val recordingsOff: String,
+    val recordingsBuffer: String,
+    val recordingsBufferText: String,
+    val recordingsEmpty: String,
+    val recordingActive: String,
+    val recordingTruncated: String,
+    val recordingSegments: String,
+    val recordingsDeleteTitle: String,
+    val recordingsDeleteText: String,
+    val recorderDropped: String,
+    val recorderError: String,
 )
 
 val LocalUiText = staticCompositionLocalOf<UiText> { error("No UiText provided") }
