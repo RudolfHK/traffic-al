@@ -28,7 +28,7 @@ object TlsSni {
 
         return try {
             Reader(buf, offset + 9, minOf(recordEnd, available)).serverName()
-        } catch (_: OutOfData) {
+        } catch (outOfData: OutOfData) {
             if (available < recordEnd) SniResult.Incomplete else SniResult.Absent
         }
     }

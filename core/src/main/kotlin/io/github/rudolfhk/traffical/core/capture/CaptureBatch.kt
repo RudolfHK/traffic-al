@@ -52,6 +52,8 @@ data class FlowDetection(
     val categoryName: String,
     /** TLS/QUIC SNI, HTTP Host or DNS query; empty if none. */
     val serverName: String,
+    /** nDPI's rating of the protocol: "Safe", "Acceptable", "Tracker_Ads", "Dangerous", ... */
+    val breed: String = "",
 ) : CaptureEntry
 
 /**
@@ -121,6 +123,7 @@ object CaptureBatch {
             protocolName = info.string(),
             categoryName = info.string(),
             serverName = info.string(),
+            breed = if (info.hasRemaining()) info.string() else "",
         )
     }
 

@@ -54,7 +54,7 @@ data class DnsMessage(
         /** Returns null if the message is truncated or malformed. */
         fun parse(buf: ByteArray, offset: Int = 0, length: Int = buf.size - offset): DnsMessage? = try {
             Reader(buf, offset, length).message()
-        } catch (_: MalformedDnsException) {
+        } catch (malformed: MalformedDnsException) {
             null
         }
     }

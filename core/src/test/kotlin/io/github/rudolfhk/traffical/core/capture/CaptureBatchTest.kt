@@ -37,7 +37,7 @@ class CaptureBatchTest {
 
     @Test
     fun `decodes flow info records`() {
-        val strings = listOf("QUIC.YouTube", "Media", "rr1.googlevideo.com").map { it.toByteArray() }
+        val strings = listOf("QUIC.YouTube", "Media", "rr1.googlevideo.com", "Fun").map { it.toByteArray() }
         val info = ByteBuffer.allocate(44 + strings.sumOf { it.size + 1 }).order(ByteOrder.LITTLE_ENDIAN)
         info.put(4).put(17).putShort(40000.toShort()).putShort(443)
         info.put(byteArrayOf(10, 0, 0, 1)).put(ByteArray(12))
@@ -59,6 +59,7 @@ class CaptureBatchTest {
         assertEquals("QUIC.YouTube", detection.protocolName)
         assertEquals("Media", detection.categoryName)
         assertEquals("rr1.googlevideo.com", detection.serverName)
+        assertEquals("Fun", detection.breed)
     }
 
     @Test

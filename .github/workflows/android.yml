@@ -26,6 +26,16 @@ jobs:
       - name: Core unit tests (pure Kotlin, no Android SDK)
         run: ./gradlew -p core test
 
+      - name: Render UI screenshots (shared screens on Compose Desktop)
+        run: ./gradlew -p tools/ui-preview render
+
+      - name: Upload UI screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screens
+          path: tools/ui-preview/build/screens/*.png
+          if-no-files-found: error
+
       - name: Install host test tools
         run: |
           sudo apt-get update -q

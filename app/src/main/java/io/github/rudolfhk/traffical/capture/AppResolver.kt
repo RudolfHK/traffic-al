@@ -6,13 +6,9 @@ import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Process
 import io.github.rudolfhk.traffical.R
+import io.github.rudolfhk.traffical.model.AppInfo
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
-
-data class AppInfo(val uid: Int, val packageName: String?, val label: String) {
-    /** Used as the PCAPNG packet comment so captures stay attributable in Wireshark. */
-    fun describe(): String = "uid=$uid app=${packageName ?: label}"
-}
 
 /** Maps connections seen on the TUN interface to the app (uid) that opened them. */
 class AppResolver(context: Context) {

@@ -40,6 +40,8 @@ data class FlowInfo(
     val category: String? = null,
     /** Server name found by nDPI: QUIC SNI or HTTP Host (null for IP literals and DNS). */
     val serverName: String? = null,
+    /** nDPI's rating of the protocol, e.g. "Safe", "Tracker_Ads", "Dangerous"; null until classified. */
+    val breed: String? = null,
 ) {
     val domain: String? get() = sni ?: serverName ?: dnsName
 }
@@ -89,6 +91,7 @@ class FlowTracker(
         var appProtocol: String? = null
         var category: String? = null
         var serverName: String? = null
+        var breed: String? = null
 
         /** First client bytes of a TCP flow, kept until the SNI is known. Null once done. */
         var helloBuffer: ByteArray? = ByteArray(0)
@@ -135,6 +138,7 @@ class FlowTracker(
         val flow = activeFlows[key] ?: return
         flow.appProtocol = detection.protocolName
         flow.category = detection.categoryName
+        flow.breed = detection.breed.ifEmpty { null }
         val name = detection.serverName.lowercase()
         if (name.isNotEmpty() && key.remotePort != DNS_PORT && !isIpLiteral(name)) {
             flow.serverName = name
@@ -287,6 +291,7 @@ class FlowTracker(
         appProtocol = appProtocol,
         category = category,
         serverName = serverName,
+        breed = breed,
     )
 
     companion object {

@@ -59,9 +59,10 @@ typedef struct __attribute__((packed)) capture_record {
 /*
  * Payload of a CAPTURE_DIR_INFO record, sent once per connection when nDPI has
  * classified it (or given up). Multi-byte fields in host byte order. It is followed by
- * three strings, each a u8 length and UTF-8 bytes: the protocol name (e.g.
- * "TLS.YouTube"), the category name and the server name (TLS/QUIC SNI, HTTP Host or
- * DNS query, may be empty).
+ * four strings, each a u8 length and UTF-8 bytes: the protocol name (e.g.
+ * "TLS.YouTube"), the category name, the server name (TLS/QUIC SNI, HTTP Host or DNS
+ * query, may be empty) and nDPI's rating of the protocol ("Safe", "Tracker_Ads",
+ * "Dangerous", ...).
  */
 typedef struct __attribute__((packed)) capture_flow_info {
   uint8_t ipver;

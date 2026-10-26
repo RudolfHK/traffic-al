@@ -93,6 +93,8 @@ EXPECTED = [
      lambda f: (f["appProtocol"] or "").startswith("TLS") and f["sni"] == "tls.example.test"),
     ("QUIC with SNI", lambda f: f["remotePort"] == 4433,
      lambda f: (f["appProtocol"] or "").startswith("QUIC") and f["serverName"] == "quic.example.test"),
+    ("nDPI rating on classified flows", lambda f: f["appProtocol"] is not None,
+     lambda f: bool(f["breed"])),
 ]
 for description, select, check in EXPECTED:
     selected = [f for f in flows if select(f)]

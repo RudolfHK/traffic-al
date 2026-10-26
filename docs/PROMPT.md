@@ -91,9 +91,14 @@ no Wi-Fi monitor mode, no capturing other devices.
 ## Recommended usage
 
 - Start each Claude Code session with the prompt above plus "Implement phase N".
-- Phases 1, 2a, 2b and 3 are implemented in this repository (phase 3 with nDPI 5.0 for
+- Phases 1, 2a, 2b, 3 and 4 are implemented in this repository (phase 3 with nDPI 5.0 for
   protocol/service detection and QUIC/HTTP server names; flows are checked against
-  tshark in CI). Continue with **4** (analysis UI).
+  tshark in CI). Continue with **5** (streaming export).
+- Decision taken for 4: the throughput chart is drawn with a Compose `Canvas` instead of
+  Vico. The screens are shared with a Compose Desktop preview tool (tools/ui-preview)
+  that renders them in CI without the Android SDK, and an area chart of two series does
+  not justify a charting dependency on both platforms. Tracker highlighting uses nDPI's
+  category and rating until the bundled lists of phase 7 exist.
 - Decision taken for 2b: zdtun via the NDK, vendored with a retransmission fix
   (app/src/main/cpp/zdtun/TRAFFIC_AL_CHANGES.md). zdtun itself is LGPL-3.0; the project is
   licensed GPL-3.0-or-later, which also allows reusing PCAPdroid code later. The

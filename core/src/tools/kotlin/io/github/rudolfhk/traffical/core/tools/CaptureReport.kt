@@ -59,6 +59,7 @@ private fun FlowInfo.toJson(): String = listOf(
     "dnsName" to dnsName,
     "appProtocol" to appProtocol,
     "category" to category,
+    "breed" to breed,
 ).joinToString(", ", "  {", "}") { (key, value) -> "\"$key\": ${jsonValue(value)}" }
 
 private fun jsonValue(value: Any?): String = when (value) {

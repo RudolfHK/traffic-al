@@ -139,7 +139,7 @@ static void put_string(uint8_t *buf, size_t *pos, const char *str) {
 static void finish_dpi(capture_engine_t *engine, const zdtun_conn_t *conn, conn_data_t *data, int giveup,
                        ndpi_protocol proto) {
   const zdtun_5tuple_t *tuple = zdtun_conn_get_5tuple(conn);
-  uint8_t buf[sizeof(capture_flow_info_t) + 3 * 256];
+  uint8_t buf[sizeof(capture_flow_info_t) + 4 * 256];
   capture_flow_info_t info = {0};
   char proto_name[64];
   size_t pos = sizeof(info);
@@ -161,6 +161,7 @@ static void finish_dpi(capture_engine_t *engine, const zdtun_conn_t *conn, conn_
   put_string(buf, &pos, ndpi_protocol2name(engine->ndpi, proto.proto, proto_name, sizeof(proto_name)));
   put_string(buf, &pos, ndpi_category_get_name(engine->ndpi, proto.category));
   put_string(buf, &pos, (const char*) data->ndpi_flow->host_server_name);
+  put_string(buf, &pos, ndpi_get_proto_breed_name(proto.breed));
 
   record_packet(engine, (const char*) buf, (int) pos, data->uid, CAPTURE_DIR_INFO, 0);
 

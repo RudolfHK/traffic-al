@@ -2,13 +2,23 @@ package io.github.rudolfhk.traffical.capture
 
 import android.content.Context
 import androidx.annotation.StringRes
+import io.github.rudolfhk.traffical.core.analysis.DashboardData
+import io.github.rudolfhk.traffical.core.analysis.FlowPacket
+import io.github.rudolfhk.traffical.core.analysis.TimeRange
+import io.github.rudolfhk.traffical.core.analysis.TrafficTimeline
+import io.github.rudolfhk.traffical.core.analysis.dashboard as buildDashboard
+import io.github.rudolfhk.traffical.core.analysis.packetsOf as flowPackets
 import io.github.rudolfhk.traffical.core.capture.CaptureBatch
 import io.github.rudolfhk.traffical.core.capture.CaptureRecord
+import io.github.rudolfhk.traffical.core.capture.Direction
 import io.github.rudolfhk.traffical.core.capture.DnsLookup
 import io.github.rudolfhk.traffical.core.capture.FlowInfo
 import io.github.rudolfhk.traffical.core.capture.FlowTracker
 import io.github.rudolfhk.traffical.core.dns.DnsType
 import io.github.rudolfhk.traffical.core.pcap.PcapngWriter
+import io.github.rudolfhk.traffical.model.AppInfo
+import io.github.rudolfhk.traffical.model.Connection
+import io.github.rudolfhk.traffical.model.DnsEvent
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,25 +29,14 @@ import java.util.concurrent.atomic.AtomicLong
 data class CaptureStatus(
     val running: Boolean = false,
     val startedAtMillis: Long = 0L,
+    /** When the last capture stopped; 0 while running or before the first one. */
+    val stoppedAtMillis: Long = 0L,
     @StringRes val errorRes: Int? = null,
     /** Hostname of a strict Private DNS provider: lookups are encrypted. */
     val privateDnsStrictHost: String? = null,
     /** Strict Private DNS was switched to automatic by this app and is restored on stop. */
     val privateDnsOverridden: Boolean = false,
 )
-
-data class DnsEvent(
-    val id: Long,
-    val timestampMillis: Long,
-    val app: AppInfo,
-    val domain: String,
-    val queryType: String,
-    val answers: List<String>,
-    val rcode: Int,
-    val latencyMillis: Long?,
-)
-
-data class Connection(val flow: FlowInfo, val app: AppInfo)
 
 /**
  * Capture state shared by the VPN service (writer, on the capture thread) and the UI.
@@ -67,6 +66,7 @@ object CaptureRepository {
     private lateinit var apps: AppResolver
     private val lock = Any()
     private val tracker = FlowTracker()
+    private val timeline = TrafficTimeline()
     private val packets = ArrayDeque<CaptureRecord>()
     private var bufferedBytes = 0L
     private val eventIds = AtomicLong()
@@ -81,7 +81,12 @@ object CaptureRepository {
 
     fun onStopped(@StringRes errorRes: Int? = null) {
         _status.update {
-            it.copy(running = false, errorRes = errorRes ?: it.errorRes, privateDnsOverridden = false)
+            it.copy(
+                running = false,
+                stoppedAtMillis = System.currentTimeMillis(),
+                errorRes = errorRes ?: it.errorRes,
+                privateDnsOverridden = false,
+            )
         }
     }
 
@@ -101,6 +106,7 @@ object CaptureRepository {
             for (entry in entries) {
                 tracker.process(entry)?.let { lookups += it.toEvent() }
                 if (entry !is CaptureRecord) continue
+                timeline.add(entry.timestampMicros, entry.uid, entry.direction == Direction.OUT, entry.packet.size)
                 packets.addLast(entry)
                 bufferedBytes += entry.packet.size
                 while (bufferedBytes > MAX_BUFFERED_BYTES) bufferedBytes -= packets.removeFirst().packet.size
@@ -112,6 +118,29 @@ object CaptureRepository {
             _dnsEvents.update { current -> (lookups.asReversed() + current).take(MAX_DNS_EVENTS) }
         }
     }
+
+    /**
+     * The moment the analysis looks at: now while capturing, otherwise when the capture
+     * stopped, so the dashboard of a finished capture does not scroll away.
+     */
+    fun referenceMicros(): Long {
+        val status = _status.value
+        val millis = if (status.running || status.stoppedAtMillis == 0L) System.currentTimeMillis() else status.stoppedAtMillis
+        return millis * 1000
+    }
+
+    /** Totals, throughput and per-app ranking over [range]. Cheap enough to call every second. */
+    fun dashboard(range: TimeRange): DashboardData {
+        val flows = _connections.value.map { it.flow }
+        val now = referenceMicros()
+        return synchronized(lock) { buildDashboard(flows, timeline, range, now) }
+    }
+
+    fun appInfo(uid: Int): AppInfo = apps.appInfo(uid)
+
+    /** The packets of [connection] still in the capture buffer, oldest first. */
+    fun packetsOf(connection: Connection): List<FlowPacket> =
+        synchronized(lock) { flowPackets(connection.flow, packets) }
 
     /** Writes the buffered packets as PCAPNG with the app per packet, and closes [out]. */
     fun exportPcapng(out: OutputStream): Int {
@@ -129,6 +158,7 @@ object CaptureRepository {
     fun clear() {
         synchronized(lock) {
             tracker.clear()
+            timeline.clear()
             packets.clear()
             bufferedBytes = 0
             _connections.value = emptyList()
