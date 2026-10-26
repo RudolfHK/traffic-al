@@ -9,6 +9,8 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=${WORK:-$(mktemp -d)}
 mkdir -p "$WORK"
+# Interpreter for the app-side client; it needs aioquic for the QUIC check.
+PYTHON=${PYTHON:-python3}
 CLI=talcli
 SRV=talsrv
 
@@ -72,7 +74,7 @@ EXPECTED=$(printf '{"blob": "%s", "small": "%s"}' \
   "$(sha256sum "$WORK/www/blob" | cut -d' ' -f1)" "$(sha256sum "$WORK/www/small" | cut -d' ' -f1)")
 status=0
 FAILED_PORTS_FILE="$WORK/failed_ports" ip netns exec "$CLI" \
-  python3 "$HERE/client.py" "$EXPECTED" "$WORK/www/small" || status=$?
+  "$PYTHON" "$HERE/client.py" "$EXPECTED" "$WORK/www/small" || status=$?
 
 echo "== kernel counters"
 ip -n "$CLI" -s link show tal0 | sed -n '/RX:/,+1p'
