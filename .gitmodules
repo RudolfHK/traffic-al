@@ -1,0 +1,3 @@
+[submodule "app/src/main/cpp/zdtun"]
+	path = app/src/main/cpp/zdtun
+	url = https://github.com/emanuele-f/zdtun

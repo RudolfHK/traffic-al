@@ -32,6 +32,13 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // Native capture engine (zdtun submodule + JNI): git submodule update --init
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
 }
 
 kotlin {

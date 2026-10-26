@@ -7,6 +7,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Optional, granted via adb (never by the user in the UI): lets the app switch strict
+         Private DNS to automatic during a capture. Root works as an alternative. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
     <!-- Needed on Android 11+ to map connection owner uids to app names. -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"

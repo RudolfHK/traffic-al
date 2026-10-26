@@ -91,7 +91,11 @@ no Wi-Fi monitor mode, no capturing other devices.
 ## Recommended usage
 
 - Start each Claude Code session with the prompt above plus "Implement phase N".
-- Phase 1 and 2a are implemented in this repository; continue with **2b**.
-- Before 2b, decide: pure-Kotlin forwarder (more code, no license impact) or zdtun via
-  NDK (proven and fast, but the app becomes GPL-3.0). The recommendation is pure Kotlin
-  first; switch to zdtun only if throughput is not good enough.
+- Phases 1, 2a and 2b are implemented in this repository, with a basic version of
+  phase 3 (per-connection bytes, SNI and DNS name). Continue with the rest of **3**
+  (nDPI protocol detection, QUIC SNI) or **4**.
+- Decision taken for 2b: zdtun via the NDK. zdtun itself is LGPL-3.0; the project is
+  licensed GPL-3.0-or-later, which also allows reusing PCAPdroid code later. The
+  "Don't copy GPL code" rule in the prompt no longer applies.
+- The native engine is tested on a Linux host with a real TUN device
+  (`tools/host-test/run.sh`), so most of it can be verified without a phone.

@@ -18,6 +18,7 @@ import io.github.rudolfhk.traffical.capture.CaptureRepository
 import io.github.rudolfhk.traffical.ui.MainScreen
 import io.github.rudolfhk.traffical.ui.TrafficAlTheme
 import io.github.rudolfhk.traffical.vpn.CaptureVpnService
+import io.github.rudolfhk.traffical.vpn.PrivateDns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -45,6 +46,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CaptureRepository.init(this)
+        restorePrivateDnsAfterCrash()
         enableEdgeToEdge()
         setContent {
             TrafficAlTheme {
@@ -53,9 +56,21 @@ class MainActivity : ComponentActivity() {
                     onStop = ::stopCapture,
                     onExport = { exportPcapng.launch(exportFileName()) },
                     onClear = CaptureRepository::clear,
+                    onSwitchPrivateDns = ::switchPrivateDns,
                 )
             }
         }
+    }
+
+    /** A capture that ended without stopping cleanly may have left strict Private DNS switched off. */
+    private fun restorePrivateDnsAfterCrash() {
+        val privateDns = PrivateDns(this)
+        if (CaptureRepository.status.value.running || !privateDns.isOverridden) return
+        lifecycleScope.launch(Dispatchers.IO) { privateDns.restore() }
+    }
+
+    private fun switchPrivateDns() {
+        startService(Intent(this, CaptureVpnService::class.java).setAction(CaptureVpnService.ACTION_SWITCH_PRIVATE_DNS))
     }
 
     private fun requestStart() {

@@ -4,7 +4,7 @@ import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 
-/** Builds raw IP packets to be written back into a TUN interface. */
+/** Builds raw IP packets, e.g. to write into a TUN interface or for tests. */
 object PacketBuilder {
 
     private const val TTL = 64
@@ -22,46 +22,77 @@ object PacketBuilder {
         val udpLength = 8 + payloadLength
         require(udpLength <= 0xffff) { "UDP payload too large: $payloadLength" }
 
-        val ipHeaderLength = when {
-            source is Inet4Address && destination is Inet4Address -> 20
-            source is Inet6Address && destination is Inet6Address -> 40
-            else -> throw IllegalArgumentException("Mixed address families: $source -> $destination")
-        }
-        val packet = ByteArray(ipHeaderLength + udpLength)
-        val src = source.address
-        val dst = destination.address
-
-        if (ipHeaderLength == 20) {
-            packet[0] = 0x45
-            packet.put16(2, packet.size)
-            packet.put16(6, 0x4000) // don't fragment
-            packet[8] = TTL.toByte()
-            packet[9] = IpProtocol.UDP.toByte()
-            src.copyInto(packet, 12)
-            dst.copyInto(packet, 16)
-            packet.put16(10, Checksum.finish(Checksum.add(0, packet, 0, 20)))
-        } else {
-            packet[0] = 0x60
-            packet.put16(4, udpLength)
-            packet[6] = IpProtocol.UDP.toByte()
-            packet[7] = TTL.toByte()
-            src.copyInto(packet, 8)
-            dst.copyInto(packet, 24)
-        }
-
-        val udp = ipHeaderLength
+        val packet = ipHeader(source, destination, IpProtocol.UDP, udpLength)
+        val udp = packet.size - udpLength
         packet.put16(udp, sourcePort)
         packet.put16(udp + 2, destinationPort)
         packet.put16(udp + 4, udpLength)
         payload.copyInto(packet, udp + 8, payloadOffset, payloadOffset + payloadLength)
 
-        var sum = Checksum.add(0, src, 0, src.size)
-        sum = Checksum.add(sum, dst, 0, dst.size)
-        sum += IpProtocol.UDP + udpLength
-        sum = Checksum.add(sum, packet, udp, udpLength)
-        val checksum = Checksum.finish(sum)
+        val checksum = transportChecksum(packet, udp, IpProtocol.UDP)
         packet.put16(udp + 6, if (checksum == 0) 0xffff else checksum)
         return packet
+    }
+
+    /** Builds an IPv4 or IPv6 TCP segment without options. */
+    fun tcp(
+        source: InetAddress,
+        sourcePort: Int,
+        destination: InetAddress,
+        destinationPort: Int,
+        sequence: Long,
+        acknowledgement: Long,
+        flags: Int,
+        payload: ByteArray = ByteArray(0),
+        window: Int = 65535,
+    ): ByteArray {
+        val tcpLength = 20 + payload.size
+        val packet = ipHeader(source, destination, IpProtocol.TCP, tcpLength)
+        val tcp = packet.size - tcpLength
+        packet.put16(tcp, sourcePort)
+        packet.put16(tcp + 2, destinationPort)
+        packet.put32(tcp + 4, sequence)
+        packet.put32(tcp + 8, acknowledgement)
+        packet[tcp + 12] = 0x50 // data offset: 5 words, no options
+        packet[tcp + 13] = flags.toByte()
+        packet.put16(tcp + 14, window)
+        payload.copyInto(packet, tcp + 20)
+        packet.put16(tcp + 16, transportChecksum(packet, tcp, IpProtocol.TCP))
+        return packet
+    }
+
+    /** Allocates a packet with a complete IP header followed by [payloadLength] zero bytes. */
+    private fun ipHeader(source: InetAddress, destination: InetAddress, protocol: Int, payloadLength: Int): ByteArray =
+        when {
+            source is Inet4Address && destination is Inet4Address -> ByteArray(20 + payloadLength).apply {
+                this[0] = 0x45
+                put16(2, size)
+                put16(6, 0x4000) // don't fragment
+                this[8] = TTL.toByte()
+                this[9] = protocol.toByte()
+                source.address.copyInto(this, 12)
+                destination.address.copyInto(this, 16)
+                put16(10, Checksum.finish(Checksum.add(0, this, 0, 20)))
+            }
+            source is Inet6Address && destination is Inet6Address -> ByteArray(40 + payloadLength).apply {
+                this[0] = 0x60
+                put16(4, payloadLength)
+                this[6] = protocol.toByte()
+                this[7] = TTL.toByte()
+                source.address.copyInto(this, 8)
+                destination.address.copyInto(this, 24)
+            }
+            else -> throw IllegalArgumentException("Mixed address families: $source -> $destination")
+        }
+
+    /** TCP/UDP checksum over the pseudo header and the transport segment starting at [offset]. */
+    private fun transportChecksum(packet: ByteArray, offset: Int, protocol: Int): Int {
+        val isIpv4 = offset == 20
+        val length = packet.size - offset
+        var sum = Checksum.add(0, packet, if (isIpv4) 12 else 8, if (isIpv4) 8 else 32) // addresses
+        sum += protocol + length
+        sum = Checksum.add(sum, packet, offset, length)
+        return Checksum.finish(sum)
     }
 }
 
@@ -89,4 +120,9 @@ internal object Checksum {
 internal fun ByteArray.put16(index: Int, value: Int) {
     this[index] = (value ushr 8).toByte()
     this[index + 1] = value.toByte()
+}
+
+internal fun ByteArray.put32(index: Int, value: Long) {
+    put16(index, (value ushr 16).toInt() and 0xffff)
+    put16(index + 2, value.toInt() and 0xffff)
 }

@@ -15,6 +15,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - uses: actions/setup-java@v4
         with:
@@ -25,6 +27,9 @@ jobs:
 
       - name: Core unit tests (pure Kotlin, no Android SDK)
         run: ./gradlew -p core test
+
+      - name: Native engine end-to-end test (real TUN device, Linux host)
+        run: sudo tools/host-test/run.sh
 
       - name: Build debug APK and run lint
         run: ./gradlew :app:assembleDebug :app:lintDebug

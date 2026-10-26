@@ -1,27 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name" translatable="false">Traffic AL</string>
-    <string name="status_running">Capturing DNS queries</string>
+    <string name="status_running">Capturing all traffic</string>
     <string name="status_stopped">Stopped</string>
-    <string name="status_counts">%1$d queries · %2$d packets buffered</string>
-    <string name="status_mode_hint">Phase 2a: only DNS goes through the local VPN; all other traffic flows normally. Nothing leaves the device except the forwarded DNS queries.</string>
+    <string name="status_counts">%1$d connections · %2$d DNS lookups · %3$d packets buffered</string>
+    <string name="status_mode_hint">All app traffic runs through the local VPN and is forwarded unchanged. DNS-over-TLS (port 853) is blocked so that automatic Private DNS falls back to readable DNS.</string>
     <string name="action_start">Start</string>
     <string name="action_stop">Stop</string>
     <string name="action_export">Export PCAPNG</string>
     <string name="action_clear">Clear</string>
     <string name="filter_hint">Filter: app, package, domain or IP</string>
-    <string name="tab_queries">DNS queries</string>
     <string name="tab_apps">Apps</string>
-    <string name="app_summary">%1$d queries · %2$d domains</string>
+    <string name="app_summary">%1$d connections · %2$d domains</string>
     <string name="empty_list">Nothing captured yet. Press Start and use your apps.</string>
-    <string name="dns_no_response">no response</string>
     <string name="dns_empty">no records</string>
     <string name="app_unknown">Unknown app</string>
     <string name="export_done">Exported %1$d packets</string>
     <string name="export_failed">Export failed</string>
     <string name="error_vpn_consent_denied">VPN permission was denied.</string>
-    <string name="error_vpn_establish">Could not start the local VPN. Is another VPN or Private DNS (strict) active?</string>
+    <string name="error_vpn_establish">Could not start the local VPN. Is another VPN active?</string>
     <string name="notification_channel">Capture</string>
     <string name="notification_title">Traffic capture active</string>
-    <string name="notification_text">Recording which apps look up which domains.</string>
+    <string name="notification_text">Recording which apps connect where.</string>
+    <string name="tab_connections">Connections</string>
+    <string name="tab_dns">DNS</string>
+    <string name="badge_blocked">blocked</string>
+    <string name="badge_encrypted_dns">encrypted DNS</string>
+    <string name="private_dns_strict">Private DNS is set to %1$s (strict): lookups are encrypted. Connections and server names (SNI) stay visible.</string>
+    <string name="action_private_dns_switch">Switch to automatic while capturing</string>
+    <string name="private_dns_overridden">Private DNS was switched to automatic and is restored when the capture stops.</string>
+    <string name="error_private_dns_switch">Could not change Private DNS. Allow root access, or grant once via adb: adb shell pm grant io.github.rudolfhk.traffical android.permission.WRITE_SECURE_SETTINGS</string>
+    <string name="error_capture_failed">The capture engine stopped unexpectedly.</string>
 </resources>
