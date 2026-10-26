@@ -9,7 +9,7 @@
     <string name="action_stop">Stop</string>
     <string name="action_export">Export PCAPNG</string>
     <string name="action_clear">Clear</string>
-    <string name="filter_hint">Filter: app, package, domain or IP</string>
+    <string name="filter_hint">Filter: app, domain, IP, protocol or category</string>
     <string name="tab_apps">Apps</string>
     <string name="app_summary">%1$d connections · %2$d domains</string>
     <string name="empty_list">Nothing captured yet. Press Start and use your apps.</string>

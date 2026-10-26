@@ -8,12 +8,28 @@ HEADER = struct.Struct("<QiHBB")  # timestamp_us, uid, length, direction, flags 
 data = open(sys.argv[1], "rb").read()
 pos = 0
 records = []
+detections = []
 while pos < len(data):
     ts, uid, length, direction, flags = HEADER.unpack_from(data, pos)
     pos += HEADER.size
-    records.append((ts, uid, direction, flags, data[pos:pos + length]))
+    if direction == 2:  # capture_flow_info_t: nDPI result of a connection
+        detections.append((ts, uid, data[pos:pos + length]))
+    else:
+        records.append((ts, uid, direction, flags, data[pos:pos + length]))
     pos += length
 assert pos == len(data), "trailing bytes in batch file"
+
+
+def flow_info(info):
+    ipver, proto, sport, dport = struct.unpack_from("<BBHH", info)
+    src = ".".join(map(str, info[6:10]))
+    dst = ".".join(map(str, info[22:26]))
+    strings, p = [], 44
+    for _ in range(3):
+        n = info[p]
+        strings.append(info[p + 1:p + 1 + n].decode())
+        p += 1 + n
+    return f"{proto:>2} {src}:{sport} -> {dst}:{dport} {strings[0]} [{strings[1]}] {strings[2]!r}"
 
 
 def ipv4(pkt):
@@ -40,9 +56,17 @@ for ts, uid, direction, flags, pkt in records:
     if direction == 1 and proto == 6 and dport == 53:
         stats["dns_tcp_out"] += 1
 
+stats["detections"] = len(detections)
 timestamps = [r[0] for r in records]
 stats["timestamps_monotonic"] = int(all(a <= b for a, b in zip(timestamps, timestamps[1:])))
 print(json.dumps(stats, indent=2, sort_keys=True))
+seen = set()
+for ts, uid, info in detections:
+    line = flow_info(info)
+    summary = line.split(" ", 1)[1].split(":", 1)[0] + line.split("->", 1)[1].split(" ", 2)[2]
+    if summary not in seen:  # one line per kind of detection
+        seen.add(summary)
+        print("nDPI:", line)
 
 # Timeline of the connections whose download failed (local ports written by client.py).
 try:

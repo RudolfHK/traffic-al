@@ -93,15 +93,16 @@ object CaptureRepository {
         _status.update { it.copy(privateDnsStrictHost = strictHost, privateDnsOverridden = overridden) }
     }
 
-    /** Handles one packet batch of the native engine. Runs on the capture thread. */
+    /** Handles one batch of packets and detections of the native engine. Runs on the capture thread. */
     fun onBatch(batch: ByteArray) {
-        val records = CaptureBatch.decode(batch)
+        val entries = CaptureBatch.decode(batch)
         val lookups = ArrayList<DnsEvent>()
         synchronized(lock) {
-            for (record in records) {
-                tracker.process(record)?.let { lookups += it.toEvent() }
-                packets.addLast(record)
-                bufferedBytes += record.packet.size
+            for (entry in entries) {
+                tracker.process(entry)?.let { lookups += it.toEvent() }
+                if (entry !is CaptureRecord) continue
+                packets.addLast(entry)
+                bufferedBytes += entry.packet.size
                 while (bufferedBytes > MAX_BUFFERED_BYTES) bufferedBytes -= packets.removeFirst().packet.size
             }
             _connections.value = tracker.snapshot(MAX_CONNECTIONS_SHOWN).map { Connection(it, apps.appInfo(it.uid)) }

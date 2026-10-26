@@ -18,10 +18,23 @@ kotlin {
     }
 }
 
+// Command-line tools for development; not part of the library the app uses.
+val tools: SourceSet by sourceSets.creating {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+configurations[tools.implementationConfigurationName].extendsFrom(configurations.implementation.get())
+
 dependencies {
     testImplementation(kotlin("test"))
 }
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks.register<JavaExec>("captureReport") {
+    description = "Converts native capture batches to PCAPNG + flows JSON (see tools/host-test)."
+    classpath = tools.runtimeClasspath
+    mainClass.set("io.github.rudolfhk.traffical.core.tools.CaptureReportKt")
 }

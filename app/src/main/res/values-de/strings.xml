@@ -8,7 +8,7 @@
     <string name="action_stop">Stopp</string>
     <string name="action_export">PCAPNG exportieren</string>
     <string name="action_clear">Leeren</string>
-    <string name="filter_hint">Filter: App, Paket, Domain oder IP</string>
+    <string name="filter_hint">Filter: App, Domain, IP, Protokoll oder Kategorie</string>
     <string name="tab_apps">Apps</string>
     <string name="app_summary">%1$d Verbindungen · %2$d Domains</string>
     <string name="empty_list">Noch nichts erfasst. Tippe auf Start und nutze deine Apps.</string>

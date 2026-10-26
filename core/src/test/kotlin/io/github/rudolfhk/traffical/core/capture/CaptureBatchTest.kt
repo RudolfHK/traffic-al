@@ -22,7 +22,7 @@ class CaptureBatchTest {
         record(buffer, 1_700_000_000_000_001L, 10123, 1, 0, byteArrayOf(1, 2, 3))
         record(buffer, 1_700_000_000_000_002L, -1, 0, 1, byteArrayOf(4, 5))
 
-        val records = CaptureBatch.decode(buffer.array(), ByteOrder.LITTLE_ENDIAN)
+        val records = CaptureBatch.decode(buffer.array(), ByteOrder.LITTLE_ENDIAN).map { it as CaptureRecord }
 
         assertEquals(2, records.size)
         assertEquals(1_700_000_000_000_001L, records[0].timestampMicros)
@@ -33,6 +33,32 @@ class CaptureBatchTest {
         assertEquals(CaptureBatch.UID_UNKNOWN, records[1].uid)
         assertEquals(Direction.IN, records[1].direction)
         assertTrue(records[1].blocked)
+    }
+
+    @Test
+    fun `decodes flow info records`() {
+        val strings = listOf("QUIC.YouTube", "Media", "rr1.googlevideo.com").map { it.toByteArray() }
+        val info = ByteBuffer.allocate(44 + strings.sumOf { it.size + 1 }).order(ByteOrder.LITTLE_ENDIAN)
+        info.put(4).put(17).putShort(40000.toShort()).putShort(443)
+        info.put(byteArrayOf(10, 0, 0, 1)).put(ByteArray(12))
+        info.put(byteArrayOf(142.toByte(), 250.toByte(), 1, 1)).put(ByteArray(12))
+        info.putShort(188).putShort(124).putShort(1)
+        strings.forEach { info.put(it.size.toByte()).put(it) }
+
+        val buffer = ByteBuffer.allocate(CaptureBatch.HEADER_SIZE + info.capacity()).order(ByteOrder.LITTLE_ENDIAN)
+        record(buffer, 5, 10123, 2, 0, info.array())
+        val detection = CaptureBatch.decode(buffer.array(), ByteOrder.LITTLE_ENDIAN).single() as FlowDetection
+
+        assertEquals(10123, detection.uid)
+        assertEquals(17, detection.protocol)
+        assertEquals("10.0.0.1", detection.localAddress.hostAddress)
+        assertEquals(40000, detection.localPort)
+        assertEquals("142.250.1.1", detection.remoteAddress.hostAddress)
+        assertEquals(443, detection.remotePort)
+        assertEquals(188, detection.masterProtocolId)
+        assertEquals("QUIC.YouTube", detection.protocolName)
+        assertEquals("Media", detection.categoryName)
+        assertEquals("rr1.googlevideo.com", detection.serverName)
     }
 
     @Test

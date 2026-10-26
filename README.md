@@ -12,7 +12,7 @@ remote VPN server, no root required. The project prompt and phase plan are in
 | 1 | Project setup, VPN consent, foreground service, start/stop | done |
 | 2a | DNS-only capture | replaced by 2b |
 | 2b | Full capture through zdtun: every connection per app, DNS, SNI, PCAPNG export | done (needs on-device test) |
-| 3 | Flow tracking (bytes, SNI, DNS name per connection) | basic version done with 2b |
+| 3 | Connection tracking: protocol/service/category via nDPI, QUIC and HTTP server names, flows verified against tshark | done (needs on-device test) |
 | 4–9 | Analysis UI, encrypted storage, enrichment, TLS decryption, validation | planned |
 
 ## How it works
@@ -26,12 +26,16 @@ apps ──all IP traffic──▶ TUN (VPN, 10.215.173.1, DNS 10.215.173.2)
                   │  connection over normal sockets (this app is excluded from its VPN)
                   ├─ DNS to 10.215.173.2:53 → redirected to the network's real resolver
                   ├─ port 853 (DNS-over-TLS/QUIC) → blocked, see "Encrypted DNS"
-                  └─ every packet + owning app uid → batches to Kotlin every 250 ms
+                  ├─ nDPI: protocol, service and category of each connection,
+                  │  server name from TLS/QUIC SNI or the HTTP Host header
+                  └─ every packet + owning app uid + nDPI results → Kotlin every 250 ms
                             │
                             ▼
                 FlowTracker (core/, pure Kotlin)
-                  connections per app with bytes, TLS server name (SNI) and the DNS
-                  name the app resolved; DNS lookups; 64 MB packet buffer → PCAPNG
+                  one record per connection: app, endpoints, protocol (e.g.
+                  "TLS.YouTube"), category, server name (SNI, QUIC, HTTP Host or the
+                  DNS name the app resolved), bytes and packets per direction, first/last
+                  seen; DNS lookups; 64 MB packet buffer → PCAPNG
 ```
 
 The app uid of each connection comes from `ConnectivityManager.getConnectionOwnerUid`
@@ -69,17 +73,23 @@ sudo tools/host-test/run.sh          # native engine end-to-end on a Linux TUN d
 ./gradlew :app:assembleDebug         # needs the Android SDK and NDK
 ```
 
-The host test builds the engine with gcc, routes a network namespace through a real
-TUN device and checks DNS over UDP/TCP, a 50 MB download (checksum), 80 parallel
-connections (half of them slow readers), DoT blocking and app attribution of every
-captured packet, while dropping 0.5% of the packets to the app on purpose
-(`DROP_RATE`). CI runs all three.
+The host test builds the engine (with nDPI) on Linux, routes a network namespace
+through a real TUN device and checks DNS over UDP/TCP, a 50 MB download (checksum), 80
+parallel connections (half of them slow readers), TLS, a QUIC Initial, DoT blocking and
+app attribution of every captured packet, while dropping 0.5% of the packets to the
+app on purpose (`DROP_RATE`).
+
+`tools/host-test/validate.sh <work dir>` then turns the capture into a PCAPNG file and
+flow records with the Kotlin core and checks that every flow matches tshark's
+conversations (`tshark -z conv,tcp -z conv,udp`: frames and bytes per direction) and
+that nDPI classified DNS, HTTP, TLS (SNI) and QUIC (SNI). CI runs all of it.
 
 ## Limitations
 
 - Only one VPN can be active per Android profile.
 - IPv6 is routed through the capture only if the network has a global IPv6 address.
-- QUIC (HTTP/3) connections show their domain via DNS, not via SNI.
+- nDPI classifies a connection from its first 12 packets; protocols that reveal
+  themselves later stay "Unknown".
 - Captured data lives in memory only (last 2,000 connections in the list, 64 MB of
   packets for export) until the encrypted storage of phase 6 exists.
 
@@ -89,4 +99,6 @@ Traffic AL is licensed under the [GNU General Public License v3.0](LICENSE) or l
 It includes [zdtun](https://github.com/emanuele-f/zdtun) by Emanuele Faranda
 (LGPL-3.0), the user-space TCP/IP forwarder also used by PCAPdroid, in
 `app/src/main/cpp/zdtun`. That copy adds retransmission of data sent to the apps, see
-[TRAFFIC_AL_CHANGES.md](app/src/main/cpp/zdtun/TRAFFIC_AL_CHANGES.md).
+[TRAFFIC_AL_CHANGES.md](app/src/main/cpp/zdtun/TRAFFIC_AL_CHANGES.md). Protocol detection
+uses [nDPI](https://github.com/ntop/nDPI) 5.0 by ntop (LGPL-3.0), unmodified, in
+`app/src/main/cpp/ndpi` (see [NDPI_ORIGIN.md](app/src/main/cpp/ndpi/NDPI_ORIGIN.md)).

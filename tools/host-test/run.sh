@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # End-to-end test of the native capture engine on a Linux host, using a real TUN
 # device and two network namespaces (app side and server side). Needs root
-# (CAP_NET_ADMIN), gcc, iproute2 and python3 (scapy optional, for a pcap dump).
+# (CAP_NET_ADMIN), cmake + ninja + gcc, iproute2, iptables and python3.
 #
 #   sudo tools/host-test/run.sh
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-CPP="$HERE/../../app/src/main/cpp"
 WORK=${WORK:-$(mktemp -d)}
+mkdir -p "$WORK"
 CLI=talcli
 SRV=talsrv
 
@@ -21,13 +21,9 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== build ($WORK)"
-CFLAGS=(-O2 -D_LITTLE_ENDIAN -I"$CPP" -I"$CPP/zdtun")
-# zdtun is third-party code: build it without warnings, ours with -Werror.
-gcc "${CFLAGS[@]}" -w -c "$CPP/zdtun/zdtun.c" -o "$WORK/zdtun.o"
-gcc "${CFLAGS[@]}" -w -c "$CPP/zdtun/utils.c" -o "$WORK/zdtun_utils.o"
-gcc "${CFLAGS[@]}" -Wall -Wextra -Werror -Wno-unused-parameter \
-  "$CPP/capture_engine.c" "$HERE/host_capture.c" "$WORK/zdtun.o" "$WORK/zdtun_utils.o" \
-  -o "$WORK/host_capture" -lpthread
+cmake -S "$HERE" -B "$WORK/build" -G Ninja -DCMAKE_BUILD_TYPE=Release > "$WORK/cmake.log"
+cmake --build "$WORK/build" > "$WORK/build.log" || { cat "$WORK/build.log"; exit 1; }
+cp "$WORK/build/host_capture" "$WORK/host_capture"
 
 echo "== network"
 ip netns add "$CLI"
@@ -45,7 +41,10 @@ mkdir -p "$WORK/www"
 head -c 50M /dev/urandom > "$WORK/www/blob"
 head -c 256K /dev/urandom > "$WORK/www/small"
 : > "$WORK/dot.log" # the port-853 listener logs every connection it accepts here
-ip netns exec "$SRV" python3 "$HERE/servers.py" 10.88.0.2 "$WORK/www" "$WORK/dot.log" &
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=tls.example.test" \
+  -keyout "$WORK/tls.pem" -out "$WORK/tls.pem.crt" 2> /dev/null
+cat "$WORK/tls.pem.crt" >> "$WORK/tls.pem"
+ip netns exec "$SRV" python3 "$HERE/servers.py" 10.88.0.2 "$WORK/www" "$WORK/dot.log" "$WORK/tls.pem" &
 SRV_PID=$!
 
 ip netns exec "$CLI" "$WORK/host_capture" tal0 10000 10.77.0.2 10.88.0.2 "$WORK/batches.bin" > "$WORK/capture.log" 2>&1 &

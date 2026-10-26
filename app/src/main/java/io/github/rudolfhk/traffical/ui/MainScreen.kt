@@ -56,6 +56,9 @@ private data class AppSummary(
     val domains: Int,
 )
 
+/** nDPI's category name for "no category". */
+private const val UNSPECIFIED_CATEGORY = "Unspecified"
+
 private const val TAB_CONNECTIONS = 0
 private const val TAB_DNS = 1
 private const val TAB_APPS = 2
@@ -236,7 +239,11 @@ private fun ConnectionList(connections: List<Connection>) {
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "${IpProtocol.name(flow.protocol)} ${endpoint(flow.remoteAddress.hostAddress.orEmpty(), flow.remotePort)}" +
+                    text = listOfNotNull(
+                        flow.appProtocol ?: IpProtocol.name(flow.protocol),
+                        flow.category?.takeUnless { it == UNSPECIFIED_CATEGORY },
+                        endpoint(flow.remoteAddress.hostAddress.orEmpty(), flow.remotePort),
+                    ).joinToString(" · ") +
                         " · ↑ ${Formatter.formatShortFileSize(context, flow.bytesOut)}" +
                         " ↓ ${Formatter.formatShortFileSize(context, flow.bytesIn)}",
                     style = MaterialTheme.typography.bodySmall,
@@ -344,7 +351,9 @@ private fun AppInfo.matches(query: String): Boolean =
 private fun Connection.matches(query: String): Boolean =
     app.matches(query) ||
         flow.domain?.contains(query, ignoreCase = true) == true ||
-        flow.remoteAddress.hostAddress?.contains(query, ignoreCase = true) == true
+        flow.remoteAddress.hostAddress?.contains(query, ignoreCase = true) == true ||
+        flow.appProtocol?.contains(query, ignoreCase = true) == true ||
+        flow.category?.contains(query, ignoreCase = true) == true
 
 private fun DnsEvent.matches(query: String): Boolean =
     app.matches(query) ||

@@ -26,8 +26,17 @@ jobs:
       - name: Core unit tests (pure Kotlin, no Android SDK)
         run: ./gradlew -p core test
 
+      - name: Install host test tools
+        run: |
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q tshark ninja-build
+          sudo python3 -m pip install -q --break-system-packages aioquic
+
       - name: Native engine end-to-end test (real TUN device, Linux host)
-        run: sudo tools/host-test/run.sh
+        run: sudo WORK="$RUNNER_TEMP/hosttest" tools/host-test/run.sh
+
+      - name: Flows match tshark conversations, nDPI classification
+        run: tools/host-test/validate.sh "$RUNNER_TEMP/hosttest" "$RUNNER_TEMP/flow-report"
 
       - name: Build debug APK and run lint
         run: ./gradlew :app:assembleDebug :app:lintDebug

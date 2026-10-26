@@ -4,6 +4,8 @@ project(trafficcapture C)
 
 # zdtun (LGPL-3.0) provides the user-space TCP/UDP/ICMP forwarding.
 add_subdirectory(zdtun)
+# nDPI (LGPL-3.0) classifies connections: protocol, service, category, server names.
+add_subdirectory(ndpi)
 
 add_library(trafficcapture SHARED
         capture_engine.c
@@ -15,4 +17,4 @@ target_compile_options(trafficcapture PRIVATE -Wall -Wextra -Wno-unused-paramete
 target_compile_definitions(trafficcapture PRIVATE ANDROID)
 
 find_library(log-lib log)
-target_link_libraries(trafficcapture zdtun ${log-lib})
+target_link_libraries(trafficcapture zdtun ndpi ${log-lib})

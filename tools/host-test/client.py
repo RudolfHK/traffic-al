@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import socket
+import ssl
 import struct
 import sys
 import time
@@ -136,6 +137,39 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         check("virtual_dns_other_port_blocked", False, "got a reply")
     except socket.timeout:
         check("virtual_dns_other_port_blocked", True)
+
+# TLS with SNI (nDPI and the Kotlin SNI parser must both see "tls.example.test")
+try:
+    tls = ssl.create_default_context()
+    tls.check_hostname = False
+    tls.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((SERVER, 8443), timeout=5) as raw, \
+            tls.wrap_socket(raw, server_hostname="tls.example.test") as s:
+        s.sendall(b"GET /small HTTP/1.0\r\nHost: tls.example.test\r\n\r\n")
+        body = b""
+        while chunk := s.recv(1 << 16):
+            body += chunk
+    ok = hashlib.sha256(body[body.index(b"\r\n\r\n") + 4:]).hexdigest() == EXPECTED["small"]
+    check("tls_download", ok)
+except OSError as e:
+    check("tls_download", False, type(e).__name__)
+
+# QUIC: the client Initial carries the SNI; no QUIC server is needed for detection.
+try:
+    from aioquic.quic.configuration import QuicConfiguration
+    from aioquic.quic.connection import QuicConnection
+
+    quic = QuicConnection(configuration=QuicConfiguration(
+        is_client=True, alpn_protocols=["h3"], server_name="quic.example.test"))
+    quic.connect((SERVER, 4433), now=time.time())
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        sent = 0
+        for datagram, address in quic.datagrams_to_send(now=time.time()):
+            s.sendto(datagram, address)
+            sent += 1
+    check("quic_initial", sent > 0, f"{sent} datagrams")
+except ImportError:
+    check("quic_initial", False, "aioquic is not installed (pip install aioquic)")
 
 print(json.dumps(results, indent=2))
 sys.exit(1 if failures else 0)

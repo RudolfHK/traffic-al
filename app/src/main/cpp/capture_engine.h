@@ -38,6 +38,9 @@
 /* Packet was written to the TUN interface (network -> app). */
 #define CAPTURE_DIR_IN 0
 
+/* Not a packet: a capture_flow_info_t with the protocol detection result of a connection. */
+#define CAPTURE_DIR_INFO 2
+
 /* The connection was blocked by the engine and never forwarded. */
 #define CAPTURE_FLAG_BLOCKED 0x01
 
@@ -52,6 +55,25 @@ typedef struct __attribute__((packed)) capture_record {
   uint8_t direction;     /* CAPTURE_DIR_* */
   uint8_t flags;         /* CAPTURE_FLAG_* */
 } capture_record_t;
+
+/*
+ * Payload of a CAPTURE_DIR_INFO record, sent once per connection when nDPI has
+ * classified it (or given up). Multi-byte fields in host byte order. It is followed by
+ * three strings, each a u8 length and UTF-8 bytes: the protocol name (e.g.
+ * "TLS.YouTube"), the category name and the server name (TLS/QUIC SNI, HTTP Host or
+ * DNS query, may be empty).
+ */
+typedef struct __attribute__((packed)) capture_flow_info {
+  uint8_t ipver;
+  uint8_t ipproto;
+  uint16_t src_port;        /* the app's side */
+  uint16_t dst_port;
+  uint8_t src_ip[16];       /* IPv4 addresses use the first 4 bytes */
+  uint8_t dst_ip[16];
+  uint16_t master_protocol; /* nDPI protocol ids, e.g. TLS */
+  uint16_t app_protocol;    /* e.g. YouTube */
+  uint16_t category;        /* nDPI category id */
+} capture_flow_info_t;
 
 typedef struct capture_callbacks {
   /* Returns the uid that owns the connection, or CAPTURE_UID_UNKNOWN. */

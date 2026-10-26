@@ -34,8 +34,14 @@ data class FlowInfo(
     val closed: Boolean,
     /** DNS-over-TLS/QUIC (port 853) or a known DNS-over-HTTPS server: lookups inside are hidden. */
     val encryptedDns: Boolean,
+    /** nDPI protocol, e.g. "TLS.YouTube", "QUIC.Google", "HTTP"; null until classified. */
+    val appProtocol: String? = null,
+    /** nDPI category, e.g. "Media", "Advertisement"; null until classified. */
+    val category: String? = null,
+    /** Server name found by nDPI: QUIC SNI or HTTP Host (null for IP literals and DNS). */
+    val serverName: String? = null,
 ) {
-    val domain: String? get() = sni ?: dnsName
+    val domain: String? get() = sni ?: serverName ?: dnsName
 }
 
 /** A completed DNS query/response pair. */
@@ -80,6 +86,9 @@ class FlowTracker(
         var blocked = false
         var closed = false
         var encryptedDns = false
+        var appProtocol: String? = null
+        var category: String? = null
+        var serverName: String? = null
 
         /** First client bytes of a TCP flow, kept until the SNI is known. Null once done. */
         var helloBuffer: ByteArray? = ByteArray(0)
@@ -108,8 +117,32 @@ class FlowTracker(
     private val pendingQueries = LinkedHashMap<PendingKey, PendingQuery>()
     private var nextFlowId = 1L
 
-    /** Processes one captured packet. Returns the DNS lookup this packet completed, if any. */
-    fun process(record: CaptureRecord): DnsLookup? {
+    /** Processes one capture entry. Returns the DNS lookup a packet completed, if any. */
+    fun process(entry: CaptureEntry): DnsLookup? = when (entry) {
+        is CaptureRecord -> processPacket(entry)
+        is FlowDetection -> {
+            attachDetection(entry)
+            null
+        }
+    }
+
+    private fun attachDetection(detection: FlowDetection) {
+        val key = FlowKey(
+            detection.ipVersion, detection.protocol,
+            detection.localAddress, detection.localPort,
+            detection.remoteAddress, detection.remotePort,
+        )
+        val flow = activeFlows[key] ?: return
+        flow.appProtocol = detection.protocolName
+        flow.category = detection.categoryName
+        val name = detection.serverName.lowercase()
+        if (name.isNotEmpty() && key.remotePort != DNS_PORT && !isIpLiteral(name)) {
+            flow.serverName = name
+            if (isDohHost(name)) flow.encryptedDns = true
+        }
+    }
+
+    private fun processPacket(record: CaptureRecord): DnsLookup? {
         val packet = PacketParser.parse(record.packet) ?: return null
         val outgoing = record.direction == Direction.OUT
         val key = if (outgoing) {
@@ -251,6 +284,9 @@ class FlowTracker(
         blocked = blocked,
         closed = closed,
         encryptedDns = encryptedDns,
+        appProtocol = appProtocol,
+        category = category,
+        serverName = serverName,
     )
 
     companion object {
@@ -274,5 +310,10 @@ class FlowTracker(
 
         fun isDohHost(hostname: String): Boolean =
             DOH_HOSTS.any { hostname == it || hostname.endsWith(".$it") }
+
+        /** "10.0.0.1", "10.0.0.1:8080", "[2001:db8::1]:443", "2001:db8::1" */
+        private fun isIpLiteral(name: String): Boolean =
+            name.startsWith("[") || name.count { it == ':' } >= 2 ||
+                name.substringBefore(':').all { it.isDigit() || it == '.' }
     }
 }

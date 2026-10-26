@@ -3,6 +3,7 @@ import http.server
 import os
 import socket
 import socketserver
+import ssl
 import struct
 import sys
 import threading
@@ -10,6 +11,7 @@ import threading
 ADDR = sys.argv[1]
 WEBROOT = sys.argv[2]
 DOT_LOG = sys.argv[3]
+TLS_CERT = sys.argv[4]  # PEM with certificate and key
 
 
 def dns_answer(query: bytes) -> bytes:
@@ -73,4 +75,12 @@ threading.Thread(target=Server((ADDR, 853), DotListener).serve_forever, daemon=T
 os.chdir(WEBROOT)
 handler = http.server.SimpleHTTPRequestHandler
 handler.log_message = lambda *args: None
+
+# HTTPS on 8443, for TLS detection (SNI)
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+tls.load_cert_chain(TLS_CERT)
+https = HttpServer((ADDR, 8443), handler)
+https.socket = tls.wrap_socket(https.socket, server_side=True)
+threading.Thread(target=https.serve_forever, daemon=True).start()
+
 HttpServer((ADDR, 8080), handler).serve_forever()

@@ -119,6 +119,52 @@ class FlowTrackerTest {
         assertEquals(uid, tracker.snapshot().single().uid)
     }
 
+    private fun detection(localPort: Int, remote: InetAddress, remotePort: Int, protocol: Int, name: String, server: String) =
+        FlowDetection(
+            clock++, uid, 4, protocol, app, localPort, remote, remotePort,
+            masterProtocolId = 0, appProtocolId = 0, categoryId = 0,
+            protocolName = name, categoryName = "Web", serverName = server,
+        )
+
+    @Test
+    fun `attaches nDPI results and uses the QUIC server name as domain`() {
+        val tracker = FlowTracker()
+        tracker.process(out(PacketBuilder.udp(app, 40000, server, 443, ByteArray(1200))))
+        tracker.process(detection(40000, server, 443, IpProtocol.UDP, "QUIC.YouTube", "rr1.googlevideo.com"))
+
+        val flow = tracker.snapshot().single()
+        assertEquals("QUIC.YouTube", flow.appProtocol)
+        assertEquals("Web", flow.category)
+        assertEquals("rr1.googlevideo.com", flow.serverName)
+        assertEquals("rr1.googlevideo.com", flow.domain)
+    }
+
+    @Test
+    fun `ignores numeric hosts, DNS queries and unknown flows`() {
+        val tracker = FlowTracker()
+        tracker.process(out(tcp(app, 50010, server, 8080, TcpFlags.SYN)))
+        tracker.process(detection(50010, server, 8080, IpProtocol.TCP, "HTTP", "93.184.216.34:8080"))
+        tracker.process(out(PacketBuilder.udp(app, 40001, virtualDns, 53, dnsQuery(9, "a.example"))))
+        tracker.process(detection(40001, virtualDns, 53, IpProtocol.UDP, "DNS", "a.example"))
+        // A detection for a flow that was never seen is dropped.
+        tracker.process(detection(1, server, 1, IpProtocol.TCP, "TLS", "ghost.example"))
+
+        val (dns, http) = tracker.snapshot()
+        assertEquals("HTTP", http.appProtocol)
+        assertNull(http.serverName)
+        assertEquals("DNS", dns.appProtocol)
+        assertNull(dns.serverName)
+        assertEquals(2, tracker.snapshot().size)
+    }
+
+    @Test
+    fun `flags DNS-over-HTTPS found by nDPI`() {
+        val tracker = FlowTracker()
+        tracker.process(out(PacketBuilder.udp(app, 40002, server, 443, ByteArray(1200))))
+        tracker.process(detection(40002, server, 443, IpProtocol.UDP, "QUIC.Google", "dns.google"))
+        assertTrue(tracker.snapshot().single().encryptedDns)
+    }
+
     @Test
     fun `evicts the least recently active flows`() {
         val tracker = FlowTracker(maxFlows = 2)

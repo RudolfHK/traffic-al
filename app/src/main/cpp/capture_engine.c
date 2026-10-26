@@ -18,6 +18,8 @@
 
 #include "capture_engine.h"
 
+#include "ndpi_api.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -39,6 +41,9 @@
 #define DNS_PORT 53
 #define PRIVATE_DNS_PORT 853
 
+/* Like PCAPdroid: enough for TLS/QUIC/HTTP/DNS metadata, bounded per-connection cost. */
+#define MAX_DPI_PACKETS 12
+
 typedef struct dns_config {
   zdtun_ip_t virtual_ip;
   uint8_t virtual_ipver; /* 0 = not configured */
@@ -56,6 +61,7 @@ struct capture_engine {
   /* Owned by the thread in capture_engine_run(). */
   int started;
   zdtun_t *tun;
+  struct ndpi_detection_module_struct *ndpi; /* NULL if nDPI failed to initialize */
   int tun_fd;
   const capture_callbacks_t *callbacks;
   void *userdata;
@@ -70,6 +76,8 @@ struct capture_engine {
 
 typedef struct conn_data {
   int uid;
+  struct ndpi_flow_struct *ndpi_flow; /* NULL once the detection is finished */
+  uint16_t dpi_packets;
 } conn_data_t;
 
 /* ******************************************************* */
@@ -117,6 +125,70 @@ static void record_packet(capture_engine_t *engine, const char *pkt, int len,
 
 /* ******************************************************* */
 
+static void put_string(uint8_t *buf, size_t *pos, const char *str) {
+  size_t len = str ? strlen(str) : 0;
+
+  if(len > 255)
+    len = 255;
+  buf[(*pos)++] = (uint8_t) len;
+  memcpy(buf + *pos, str, len);
+  *pos += len;
+}
+
+/* Reports the nDPI result of a connection and releases its nDPI state. */
+static void finish_dpi(capture_engine_t *engine, const zdtun_conn_t *conn, conn_data_t *data, int giveup,
+                       ndpi_protocol proto) {
+  const zdtun_5tuple_t *tuple = zdtun_conn_get_5tuple(conn);
+  uint8_t buf[sizeof(capture_flow_info_t) + 3 * 256];
+  capture_flow_info_t info = {0};
+  char proto_name[64];
+  size_t pos = sizeof(info);
+
+  if(giveup)
+    proto = ndpi_detection_giveup(engine->ndpi, data->ndpi_flow);
+
+  info.ipver = tuple->ipver;
+  info.ipproto = tuple->ipproto;
+  info.src_port = ntohs(tuple->src_port);
+  info.dst_port = ntohs(tuple->dst_port);
+  memcpy(info.src_ip, &tuple->src_ip, (tuple->ipver == 4) ? 4 : 16);
+  memcpy(info.dst_ip, &tuple->dst_ip, (tuple->ipver == 4) ? 4 : 16);
+  info.master_protocol = proto.proto.master_protocol;
+  info.app_protocol = proto.proto.app_protocol;
+  info.category = (uint16_t) proto.category;
+  memcpy(buf, &info, sizeof(info));
+
+  put_string(buf, &pos, ndpi_protocol2name(engine->ndpi, proto.proto, proto_name, sizeof(proto_name)));
+  put_string(buf, &pos, ndpi_category_get_name(engine->ndpi, proto.category));
+  put_string(buf, &pos, (const char*) data->ndpi_flow->host_server_name);
+
+  record_packet(engine, (const char*) buf, (int) pos, data->uid, CAPTURE_DIR_INFO, 0);
+
+  ndpi_free_flow(data->ndpi_flow);
+  data->ndpi_flow = NULL;
+}
+
+/* Feeds a packet of the connection to nDPI until it is classified. */
+static void process_dpi(capture_engine_t *engine, const zdtun_conn_t *conn, const char *pkt, int len) {
+  conn_data_t *data = (conn_data_t*) zdtun_conn_get_userdata(conn);
+  ndpi_protocol proto;
+
+  if(!data || !data->ndpi_flow)
+    return;
+
+  proto = ndpi_detection_process_packet(engine->ndpi, data->ndpi_flow, (const unsigned char*) pkt,
+                                        (unsigned short) len, now_us() / 1000, NULL);
+  data->dpi_packets++;
+
+  if((proto.proto.master_protocol != NDPI_PROTOCOL_UNKNOWN || proto.proto.app_protocol != NDPI_PROTOCOL_UNKNOWN)
+     && (proto.state >= NDPI_STATE_MONITORING))
+    finish_dpi(engine, conn, data, 0, proto);
+  else if(data->dpi_packets >= MAX_DPI_PACKETS)
+    finish_dpi(engine, conn, data, 1, proto);
+}
+
+/* ******************************************************* */
+
 static int conn_uid(const zdtun_conn_t *conn) {
   const conn_data_t *data = (const conn_data_t*) zdtun_conn_get_userdata(conn);
 
@@ -148,6 +220,7 @@ static int send_client(zdtun_t *tun, zdtun_pkt_t *pkt, const zdtun_conn_t *conn)
   }
 
   record_packet(engine, pkt->buf, pkt->len, conn_uid(conn), CAPTURE_DIR_IN, 0);
+  process_dpi(engine, conn, pkt->buf, pkt->len);
   return 0;
 }
 
@@ -206,6 +279,11 @@ static int on_connection_open(zdtun_t *tun, zdtun_conn_t *conn) {
     return 1;
   }
   data->uid = uid;
+  if(engine->ndpi) {
+    data->ndpi_flow = (struct ndpi_flow_struct*) ndpi_calloc(1, ndpi_detection_get_sizeof_ndpi_flow_struct());
+    if(!data->ndpi_flow)
+      error("cannot allocate the nDPI flow");
+  }
   zdtun_conn_set_userdata(conn, data);
   return 0;
 }
@@ -213,7 +291,16 @@ static int on_connection_open(zdtun_t *tun, zdtun_conn_t *conn) {
 /* ******************************************************* */
 
 static void on_connection_close(zdtun_t *tun, const zdtun_conn_t *conn) {
-  free(zdtun_conn_get_userdata(conn));
+  capture_engine_t *engine = (capture_engine_t*) zdtun_userdata(tun);
+  conn_data_t *data = (conn_data_t*) zdtun_conn_get_userdata(conn);
+
+  /* Report what nDPI found so far for connections it did not classify yet. */
+  if(data && data->ndpi_flow) {
+    ndpi_protocol unknown = {0};
+    finish_dpi(engine, conn, data, 1, unknown);
+  }
+
+  free(data);
   zdtun_conn_set_userdata((zdtun_conn_t*) conn, NULL);
 }
 
@@ -245,6 +332,7 @@ static void handle_tun_packet(capture_engine_t *engine, char *buf, int len) {
   }
 
   record_packet(engine, buf, len, conn_uid(conn), CAPTURE_DIR_OUT, 0);
+  process_dpi(engine, conn, buf, len);
 
   if(zdtun_forward(engine->tun, &pkt, conn) != 0)
     zdtun_conn_close(engine->tun, conn, CONN_STATUS_ERROR);
@@ -356,6 +444,14 @@ int capture_engine_run(capture_engine_t *engine, int tun_fd, int mtu,
   }
 
   zdtun_set_mtu(engine->tun, mtu);
+
+  /* Protocol detection is optional: without it connections are still forwarded. */
+  engine->ndpi = ndpi_init_detection_module(NULL);
+  if(engine->ndpi && ndpi_finalize_initialization(engine->ndpi) != 0) {
+    error("nDPI initialization failed");
+    ndpi_exit_detection_module(engine->ndpi);
+    engine->ndpi = NULL;
+  }
   engine->last_flush_us = last_purge_us = now_us();
 
   while(1) {
@@ -417,6 +513,10 @@ cleanup:
     /* Closes all connections (sending TCP RSTs to the apps) and frees conn data. */
     zdtun_finalize(engine->tun);
     engine->tun = NULL;
+  }
+  if(engine->ndpi) {
+    ndpi_exit_detection_module(engine->ndpi);
+    engine->ndpi = NULL;
   }
   if(engine->batch)
     flush_batch(engine);
