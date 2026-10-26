@@ -17,7 +17,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
@@ -121,8 +120,11 @@ fun MainScreen(
             val modifier = Modifier.padding(padding)
             when {
                 detail != null -> {
-                    val packets by produceState<List<FlowPacket>?>(null, detail.flow.id, detail.flow.closed) {
-                        value = withContext(Dispatchers.Default) { CaptureRepository.packetsOf(detail) }
+                    var packets by remember(detail.flow.id, detail.flow.closed) {
+                        mutableStateOf<List<FlowPacket>?>(null)
+                    }
+                    LaunchedEffect(detail.flow.id, detail.flow.closed) {
+                        packets = withContext(Dispatchers.Default) { CaptureRepository.packetsOf(detail) }
                     }
                     ConnectionDetailScreen(detail, packets, modifier)
                 }
