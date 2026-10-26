@@ -94,7 +94,8 @@ no Wi-Fi monitor mode, no capturing other devices.
 - Phases 1, 2a and 2b are implemented in this repository, with a basic version of
   phase 3 (per-connection bytes, SNI and DNS name). Continue with the rest of **3**
   (nDPI protocol detection, QUIC SNI) or **4**.
-- Decision taken for 2b: zdtun via the NDK. zdtun itself is LGPL-3.0; the project is
+- Decision taken for 2b: zdtun via the NDK, vendored with a retransmission fix
+  (app/src/main/cpp/zdtun/TRAFFIC_AL_CHANGES.md). zdtun itself is LGPL-3.0; the project is
   licensed GPL-3.0-or-later, which also allows reusing PCAPdroid code later. The
   "Don't copy GPL code" rule in the prompt no longer applies.
 - The native engine is tested on a Linux host with a real TUN device

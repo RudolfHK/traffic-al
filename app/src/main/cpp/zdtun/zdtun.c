@@ -19,6 +19,9 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301, USA.
  *
+ * Modified 2026 for Traffic AL: retransmission of TCP data sent to the
+ * client, see TRAFFIC_AL_CHANGES.md. Changes are marked "Traffic AL".
+ *
  */
 
 #include "zdtun.h"
@@ -35,6 +38,12 @@
 #define UDP_HEADER_LEN 8
 
 #define ICMP_TIMEOUT_SEC 5
+
+// Traffic AL: retransmission of data sent to the client
+#define TCP_RTX_MAX_UNACKED (256 * 1024) // also caps the data in flight per connection
+#define TCP_RTX_MIN_RTO_MS 200
+#define TCP_RTX_MAX_BACKOFF 5
+#define TCP_RTX_DUP_ACKS 3
 #define UDP_TIMEOUT_SEC 30
 #define TCP_TIMEOUT_SEC 60
 
@@ -92,6 +101,21 @@ typedef struct {
   uint8_t ipver;
 } proxy_t;
 
+// Traffic AL: data sent to the client but not acknowledged yet
+typedef struct tcp_rtx {
+  char *buf;
+  u_int32_t start;           // offset of the first unacknowledged byte in buf
+  u_int32_t len;             // unacknowledged bytes (a FIN is not stored)
+  u_int32_t cap;
+  u_int32_t seq;             // sequence number of the first unacknowledged byte
+  u_int32_t recover;         // fast recovery ends when this is acknowledged
+  uint64_t last_progress_ms; // last time the client acknowledged new data
+  u_int16_t last_win;        // raw window of the last ACK, to recognize duplicate ACKs
+  u_int8_t dup_acks;
+  u_int8_t backoff;
+  u_int8_t in_recovery;
+} tcp_rtx_t;
+
 
 /* ******************************************************* */
 
@@ -116,6 +140,7 @@ typedef struct zdtun_conn {
       u_int32_t window_size;   // scaled client window size
       u_int16_t mss;           // client MSS
       u_int8_t window_scale;   // client/zdtun TCP window scale
+      tcp_rtx_t rtx;           // Traffic AL
 
       struct {
         uint8_t fin_ack_sent:1;
@@ -673,6 +698,10 @@ void zdtun_conn_close(zdtun_t *tun, zdtun_conn_t *conn, zdtun_conn_status_t stat
     }
 
     conn->tcp.tx_queue = NULL;
+
+    // Traffic AL
+    free(conn->tcp.rtx.buf);
+    memset(&conn->tcp.rtx, 0, sizeof(conn->tcp.rtx));
   }
 
   conn->status = (status >= CONN_STATUS_CLOSED) ? status : CONN_STATUS_CLOSED;
@@ -732,8 +761,10 @@ static int send_syn_ack(zdtun_t *tun, zdtun_conn_t *conn) {
 
   build_reply_tcpip(tun, conn, TH_SYN | TH_ACK, 0, 2 /* n. 32bit words*/);
 
-  if((rv = send_to_client(tun, conn, TCP_HEADER_LEN + 8 /* opts length */)) == 0)
+  if((rv = send_to_client(tun, conn, TCP_HEADER_LEN + 8 /* opts length */)) == 0) {
     conn->tcp.zdtun_seq += 1;
+    conn->tcp.rtx.seq = conn->tcp.zdtun_seq; // Traffic AL
+  }
 
   return rv;
 }
@@ -766,11 +797,188 @@ static int tcp_socket_syn(zdtun_t *tun, zdtun_conn_t *conn) {
 
 /* ******************************************************* */
 
+static uint64_t zdtun_now_ms(void) {
+  struct timespec ts;
+
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ((uint64_t) ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* ******************************************************* */
+
+/*
+ * Traffic AL: retransmission of data sent to the client.
+ *
+ * Upstream zdtun assumes that the client never loses a segment written to it.
+ * The client's kernel may still drop in-window data (e.g. when its receive
+ * memory is exhausted, TCPRcvQDrop), and without a retransmission the
+ * connection stalls forever. Sent data is therefore kept until the client
+ * acknowledges it and resent on duplicate ACKs or after a timeout.
+ */
+
+/* Bytes sent to the client and not acknowledged yet, including a FIN. */
+static inline u_int32_t tcp_outstanding(const zdtun_conn_t *conn) {
+  return conn->tcp.zdtun_seq - conn->tcp.rtx.seq;
+}
+
+static int tcp_rtx_store(tcp_rtx_t *rtx, const char *data, u_int32_t len) {
+  if(rtx->start + rtx->len + len > rtx->cap) {
+    if(rtx->start > 0) {
+      memmove(rtx->buf, rtx->buf + rtx->start, rtx->len);
+      rtx->start = 0;
+    }
+
+    if(rtx->len + len > rtx->cap) {
+      u_int32_t cap = rtx->cap ? rtx->cap : 16384;
+      char *buf;
+
+      while(cap < rtx->len + len)
+        cap *= 2;
+
+      if(!(buf = realloc(rtx->buf, cap)))
+        return -1;
+
+      rtx->buf = buf;
+      rtx->cap = cap;
+    }
+  }
+
+  memcpy(rtx->buf + rtx->start + rtx->len, data, len);
+  rtx->len += len;
+  return 0;
+}
+
+static int tcp_send_segment(zdtun_t *tun, zdtun_conn_t *conn, u_int32_t seq,
+        const char *data, u_int16_t len, u_int8_t flags) {
+  int iphdr_len = zdtun_iphdr_len(tun, conn);
+  u_int32_t next_seq = conn->tcp.zdtun_seq;
+
+  if(len > 0)
+    memcpy(&tun->reply_buf[iphdr_len + TCP_HEADER_LEN], data, len);
+
+  // build_reply_tcpip uses zdtun_seq as the segment sequence number
+  conn->tcp.zdtun_seq = seq;
+  build_reply_tcpip(tun, conn, flags, len, 0);
+  conn->tcp.zdtun_seq = next_seq;
+
+  return send_to_client(tun, conn, TCP_HEADER_LEN + len);
+}
+
+/* Resends up to max_bytes of unacknowledged data, then the FIN if it is unacknowledged. */
+static int tcp_retransmit(zdtun_t *tun, zdtun_conn_t *conn, u_int32_t max_bytes) {
+  tcp_rtx_t *rtx = &conn->tcp.rtx;
+  u_int32_t sent = 0;
+
+  while((sent < rtx->len) && (sent < max_bytes)) {
+    u_int32_t len = rtx->len - sent;
+
+    if(len > conn->tcp.mss)
+      len = conn->tcp.mss;
+    if(len > max_bytes - sent)
+      len = max_bytes - sent;
+
+    if(tcp_send_segment(tun, conn, rtx->seq + sent, rtx->buf + rtx->start + sent, len,
+        TH_ACK | ((sent + len == rtx->len) ? TH_PUSH : 0)) != 0)
+      return -1;
+
+    sent += len;
+  }
+
+  if((sent == rtx->len) && conn->tcp.fin_ack_sent && (tcp_outstanding(conn) == rtx->len + 1))
+    return tcp_send_segment(tun, conn, rtx->seq + rtx->len, NULL, 0, TH_FIN | TH_ACK);
+
+  return 0;
+}
+
+/* Processes the acknowledgement number of a client segment. */
+static int tcp_client_ack(zdtun_t *tun, zdtun_conn_t *conn, u_int32_t ack,
+        u_int16_t win, u_int16_t l7_len, u_int8_t flags) {
+  tcp_rtx_t *rtx = &conn->tcp.rtx;
+  u_int32_t outstanding = tcp_outstanding(conn);
+  u_int32_t acked = ack - rtx->seq;
+  u_int16_t last_win = rtx->last_win;
+
+  rtx->last_win = win;
+
+  if(outstanding == 0)
+    return 0;
+
+  if(acked == 0) {
+    // A duplicate ACK: the client misses the segment at rtx->seq
+    if((l7_len == 0) && (win == last_win) && !(flags & (TH_SYN | TH_FIN | TH_RST))
+        && (++rtx->dup_acks == TCP_RTX_DUP_ACKS)) {
+      rtx->in_recovery = 1;
+      rtx->recover = conn->tcp.zdtun_seq;
+      return tcp_retransmit(tun, conn, conn->tcp.mss);
+    }
+
+    return 0;
+  }
+
+  if(acked > outstanding)
+    return 0; // old ACK
+
+  acked = min(acked, rtx->len); // the FIN is not stored
+  rtx->start += acked;
+  rtx->len -= acked;
+  if(rtx->len == 0)
+    rtx->start = 0;
+  rtx->seq = ack;
+  rtx->dup_acks = 0;
+  rtx->backoff = 0;
+  rtx->last_progress_ms = zdtun_now_ms();
+
+  if(rtx->in_recovery) {
+    if((int32_t)(ack - rtx->recover) >= 0)
+      rtx->in_recovery = 0;
+    else
+      // Partial ACK: the next segment is missing too (NewReno)
+      return tcp_retransmit(tun, conn, conn->tcp.mss);
+  }
+
+  return 0;
+}
+
+/* ******************************************************* */
+
+void zdtun_tcp_retransmit_timeouts(zdtun_t *tun) {
+  zdtun_conn_t *conn, *tmp;
+  uint64_t now = zdtun_now_ms();
+
+  HASH_ITER(hh, tun->conn_table, conn, tmp) {
+    tcp_rtx_t *rtx = &conn->tcp.rtx;
+
+    if((conn->tuple.ipproto != IPPROTO_TCP) || (conn->status != CONN_STATUS_CONNECTED)
+        || (tcp_outstanding(conn) == 0)
+        || (now - rtx->last_progress_ms < ((uint64_t) TCP_RTX_MIN_RTO_MS << rtx->backoff)))
+      continue;
+
+    debug("TCP retransmission timeout, resending %u bytes", rtx->len);
+
+    rtx->in_recovery = 1;
+    rtx->recover = conn->tcp.zdtun_seq;
+    rtx->last_progress_ms = now;
+    if(rtx->backoff < TCP_RTX_MAX_BACKOFF)
+      rtx->backoff++;
+
+    // On error the connection is closed and skipped from now on
+    tcp_retransmit(tun, conn, 0xFFFFFFFF);
+  }
+}
+
+/* ******************************************************* */
+
 static void tcp_socket_fin_ack(zdtun_t *tun, zdtun_conn_t *conn) {
+  u_int8_t was_idle = (tcp_outstanding(conn) == 0); // Traffic AL
+
   build_reply_tcpip(tun, conn, TH_FIN | TH_ACK, 0, 0);
 
-  if(send_to_client(tun, conn, TCP_HEADER_LEN) == 0)
+  if(send_to_client(tun, conn, TCP_HEADER_LEN) == 0) {
     conn->tcp.zdtun_seq += 1;
+
+    if(was_idle)
+      conn->tcp.rtx.last_progress_ms = zdtun_now_ms(); // Traffic AL
+  }
 }
 
 /* ******************************************************* */
@@ -1237,7 +1445,8 @@ static int handle_tcp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt,
 
     debug("MSS: %d, scale: %d\n", mss, scale);
 
-    conn->tcp.window_size = ntohs(data->th_win) << scale;
+    conn->tcp.window_size = min(((u_int32_t) ntohs(data->th_win)) << scale,
+      (u_int32_t) TCP_RTX_MAX_UNACKED); // Traffic AL
     conn->tcp.window_scale = scale;
     conn->tcp.mss = mss;
 
@@ -1271,8 +1480,24 @@ static int handle_tcp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt,
   uint8_t is_keep_alive = ((data->th_flags & TH_ACK) &&
     ((seq + 1) == conn->tcp.client_seq));
 
+  // Traffic AL: the client repeats its SYN when our SYN+ACK was lost
+  if((data->th_flags & TH_SYN) && !(data->th_flags & TH_ACK) && ((seq + 1) == conn->tcp.client_seq)
+      && (conn->proxy_mode != PROXY_SOCKS5) && (tcp_outstanding(conn) == 0)
+      && (conn->tcp.zdtun_seq == conn->tcp.rtx.seq)) {
+    conn->tcp.zdtun_seq -= 1;
+    return send_syn_ack(tun, conn);
+  }
+
   if(!is_keep_alive && (seq != (conn->tcp.client_seq + conn->tcp.tx_queue_size))) {
     debug("ignoring out of sequence data: expected %d, got %d", conn->tcp.client_seq, seq);
+
+    // Traffic AL: data (or a FIN) the client resends because our ACK was lost. ACK it
+    // again, otherwise the client keeps retransmitting until it gives up.
+    if(((pkt->l7_len > 0) || (data->th_flags & TH_FIN)) && ((int32_t)(seq - conn->tcp.client_seq) < 0)) {
+      build_reply_tcpip(tun, conn, TH_ACK, 0, 0);
+      return send_to_client(tun, conn, TCP_HEADER_LEN);
+    }
+
     return 0;
   }
 
@@ -1283,6 +1508,11 @@ static int handle_tcp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt,
     zdtun_conn_close(tun, conn, CONN_STATUS_SOCKS5_ERROR);
     return -1;
   }
+
+  // Traffic AL: release acknowledged data, retransmit on duplicate ACKs
+  if(!(data->th_flags & TH_RST) && (data->th_flags & TH_ACK) && (tcp_client_ack(tun, conn,
+      ntohl(data->th_ack), ntohs(data->th_win), pkt->l7_len, data->th_flags) != 0))
+    return -1;
 
   if(data->th_flags & TH_RST) {
     debug("Got TCP reset from client");
@@ -1342,7 +1572,12 @@ static int handle_tcp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt,
         in_flight = 0xFFFFFFFF - ack_num + conn->tcp.zdtun_seq + 1;
 
       uint32_t window = ntohs(data->th_win) << conn->tcp.window_scale;
-      conn->tcp.window_size = window - in_flight;
+
+      // Traffic AL: cap the data in flight (it is kept for retransmission) and do not
+      // underflow when the client advertises less than what is in flight.
+      if(window > TCP_RTX_MAX_UNACKED)
+        window = TCP_RTX_MAX_UNACKED;
+      conn->tcp.window_size = (window > in_flight) ? (window - in_flight) : 0;
 
       if(!FD_ISSET(conn->sock, &tun->all_fds) && (conn->tcp.window_size > 0)) {
         log_tcp_window("[%d][Window size: %u] enabling socket", conn->tuple.src_port, conn->tcp.window_size);
@@ -1777,6 +2012,7 @@ static int handle_tcp_reply(zdtun_t *tun, zdtun_conn_t *conn) {
   }
 
   int flags = TH_ACK;
+  u_int8_t was_idle = (tcp_outstanding(conn) == 0); // Traffic AL
 
 #ifndef WIN32
   // Since we cannot determine server message bounds, we assume that
@@ -1792,6 +2028,15 @@ static int handle_tcp_reply(zdtun_t *tun, zdtun_conn_t *conn) {
   build_reply_tcpip(tun, conn, flags, l4_len, 0);
 
   if(send_to_client(tun, conn, l4_len + TCP_HEADER_LEN) == 0) {
+    // Traffic AL: keep the data until the client acknowledges it
+    if(tcp_rtx_store(&conn->tcp.rtx, payload_ptr, l4_len) != 0) {
+      error("cannot store TCP data for retransmission");
+      zdtun_conn_close(tun, conn, CONN_STATUS_ERROR);
+      return -1;
+    }
+    if(was_idle)
+      conn->tcp.rtx.last_progress_ms = zdtun_now_ms();
+
     conn->tcp.zdtun_seq += l4_len;
     conn->tcp.window_size -= l4_len;
 

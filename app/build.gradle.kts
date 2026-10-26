@@ -33,7 +33,7 @@ android {
         compose = true
     }
 
-    // Native capture engine (zdtun submodule + JNI): git submodule update --init
+    // Native capture engine: zdtun + JNI bridge
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")

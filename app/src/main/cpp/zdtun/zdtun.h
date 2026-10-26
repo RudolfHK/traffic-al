@@ -19,6 +19,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301, USA.
  *
+ * Modified 2026 for Traffic AL, see TRAFFIC_AL_CHANGES.md.
+ *
  */
 
 #ifndef __ZDTUN_H__
@@ -384,6 +386,14 @@ int zdtun_handle_fd(zdtun_t *tun, const fd_set *rd_fds, const fd_set *wr_fds);
  * @param tun a zdtun instance.
  */
 void zdtun_purge_expired(zdtun_t *tun);
+
+/*
+ * Traffic AL: resend TCP data the client has not acknowledged in time.
+ * To be called periodically, ideally every 100-250 ms.
+ *
+ * @param tun a zdtun instance.
+ */
+void zdtun_tcp_retransmit_timeouts(zdtun_t *tun);
 
 /*
  * Get zdtun statisticts.

@@ -41,7 +41,7 @@ def dns_query(name, tcp=False):
     return socket.inet_ntoa(reply[-4:])
 
 
-def http_get(path, mark=None):
+def http_get(path, mark=None, slow=False):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     if mark is not None:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, mark)
@@ -50,10 +50,13 @@ def http_get(path, mark=None):
     s.sendall(f"GET /{path} HTTP/1.0\r\nHost: {SERVER}\r\n\r\n".encode())
     chunks = []
     while True:
-        chunk = s.recv(1 << 16)
+        # A slow reader lets the receive queue fill up, like a busy app.
+        chunk = s.recv(4096 if slow else 1 << 16)
         if not chunk:
             break
         chunks.append(chunk)
+        if slow:
+            time.sleep(0.002)
     s.close()
     data = b"".join(chunks)
     return data[data.index(b"\r\n\r\n") + 4:]
@@ -69,14 +72,16 @@ def timed_download(mark=None):
 check("dns_udp", dns_query("tracker.example.test") == SERVER)
 check("dns_tcp", dns_query("cdn.example.test", tcp=True) == SERVER)
 
-body, captured_mbps = timed_download()
-check("download_through_tun", hashlib.sha256(body).hexdigest() == EXPECTED["blob"], f"{captured_mbps:.0f} Mbit/s")
-body, direct_mbps = timed_download(PROTECT_MARK)
-check("download_direct", hashlib.sha256(body).hexdigest() == EXPECTED["blob"], f"{direct_mbps:.0f} Mbit/s")
-
-def small_download(_):
+for name, mark in (("download_through_tun", None), ("download_direct", PROTECT_MARK)):
     try:
-        return hashlib.sha256(http_get("small")).hexdigest()
+        body, mbps = timed_download(mark)
+        check(name, hashlib.sha256(body).hexdigest() == EXPECTED["blob"], f"{mbps:.0f} Mbit/s")
+    except OSError as e:
+        check(name, False, type(e).__name__)
+
+def small_download(i):
+    try:
+        return hashlib.sha256(http_get("small", slow=i % 2 == 1)).hexdigest()
     except OSError as e:
         return type(e).__name__
 

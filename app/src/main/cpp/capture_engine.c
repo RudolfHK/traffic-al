@@ -400,6 +400,9 @@ int capture_engine_run(capture_engine_t *engine, int tun_fd, int mtu,
       }
     }
 
+    /* Resend data an app has not acknowledged in time (it may have been dropped). */
+    zdtun_tcp_retransmit_timeouts(engine->tun);
+
     now = now_us();
     if(now - last_purge_us >= PURGE_INTERVAL_US) {
       zdtun_purge_expired(engine->tun);

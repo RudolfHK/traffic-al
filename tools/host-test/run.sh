@@ -60,6 +60,12 @@ ip -n "$CLI" rule add fwmark 0x77 lookup main pref 100
 ip -n "$CLI" rule add to 10.88.0.0/24 lookup 177 pref 200
 ip -n "$CLI" route add default dev tal0 table 177
 ip netns exec "$CLI" sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.tal0.rp_filter=0
+# The app's kernel may drop segments the engine wrote to the TUN (e.g. receive queue
+# full, TCPRcvQDrop). TCP recovers from that only if the engine retransmits, so drop a
+# share of the server-to-app HTTP packets on purpose.
+DROP_RATE=${DROP_RATE:-0.005}
+ip netns exec "$CLI" iptables -A INPUT -i tal0 -p tcp --sport 8080 \
+  -m statistic --mode random --probability "$DROP_RATE" -j DROP
 sleep 1
 
 echo "== client"
@@ -70,6 +76,7 @@ ip netns exec "$CLI" python3 "$HERE/client.py" "$EXPECTED" || status=$?
 
 echo "== kernel counters"
 ip -n "$CLI" -s link show tal0 | sed -n '/RX:/,+1p'
+ip netns exec "$CLI" iptables -L INPUT -v -n | awk '/statistic/ { print "injected drops: " $1 }'
 echo "app side:"
 ip netns exec "$CLI" nstat -az TcpExtTCPOFODrop TcpExtTCPRcvQDrop TcpExtTCPZeroWindowDrop TcpExtTCPBacklogDrop | tail -n +2
 echo "server side:"

@@ -64,7 +64,6 @@ adb shell pm grant io.github.rudolfhk.traffical android.permission.WRITE_SECURE_
 ## Build and test
 
 ```
-git submodule update --init         # zdtun
 ./gradlew -p core test               # protocol code, plain JVM, no Android SDK needed
 sudo tools/host-test/run.sh          # native engine end-to-end on a Linux TUN device
 ./gradlew :app:assembleDebug         # needs the Android SDK and NDK
@@ -72,7 +71,9 @@ sudo tools/host-test/run.sh          # native engine end-to-end on a Linux TUN d
 
 The host test builds the engine with gcc, routes a network namespace through a real
 TUN device and checks DNS over UDP/TCP, a 50 MB download (checksum), 80 parallel
-connections, DoT blocking and app attribution of every captured packet. CI runs all three.
+connections (half of them slow readers), DoT blocking and app attribution of every
+captured packet, while dropping 0.5% of the packets to the app on purpose
+(`DROP_RATE`). CI runs all three.
 
 ## Limitations
 
@@ -86,5 +87,6 @@ connections, DoT blocking and app attribution of every captured packet. CI runs 
 
 Traffic AL is licensed under the [GNU General Public License v3.0](LICENSE) or later.
 It includes [zdtun](https://github.com/emanuele-f/zdtun) by Emanuele Faranda
-(LGPL-3.0, git submodule in `app/src/main/cpp/zdtun`), the user-space TCP/IP forwarder
-also used by PCAPdroid.
+(LGPL-3.0), the user-space TCP/IP forwarder also used by PCAPdroid, in
+`app/src/main/cpp/zdtun`. That copy adds retransmission of data sent to the apps, see
+[TRAFFIC_AL_CHANGES.md](app/src/main/cpp/zdtun/TRAFFIC_AL_CHANGES.md).
