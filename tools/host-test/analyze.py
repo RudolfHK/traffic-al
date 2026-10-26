@@ -44,6 +44,34 @@ timestamps = [r[0] for r in records]
 stats["timestamps_monotonic"] = int(all(a <= b for a, b in zip(timestamps, timestamps[1:])))
 print(json.dumps(stats, indent=2, sort_keys=True))
 
-if len(sys.argv) > 2:
+# Timeline of the connections whose download failed (local ports written by client.py).
+try:
+    failed_ports = {int(p) for p in open(sys.argv[2]).read().split()}
+except (IndexError, FileNotFoundError):
+    failed_ports = set()
+
+TCP_FLAGS = "FSRPAU"
+for port in sorted(failed_ports):
+    print(f"--- failed connection, app port {port}")
+    isn = ack_base = None
+    for ts, uid, direction, flags, pkt in records:
+        proto, src, sport, dst, dport = ipv4(pkt)
+        if proto != 6 or port not in (sport, dport):
+            continue
+        ihl = (pkt[0] & 0x0F) * 4
+        seq, ack, off, tcp_flags, win = struct.unpack("!IIBBH", pkt[ihl + 4:ihl + 16])
+        payload = len(pkt) - ihl - (off >> 4) * 4
+        names = "".join(n for i, n in enumerate(TCP_FLAGS) if tcp_flags & (1 << i))
+        if direction == 0:  # engine -> app
+            if isn is None:
+                isn = seq
+            print(f"{ts % 10**8:>10} engine->app seq={(seq - isn) % 2**32:>7} len={payload:>5} {names}")
+        else:
+            if ack_base is None and isn is not None:
+                ack_base = isn
+            rel_ack = (ack - ack_base) % 2**32 if ack_base is not None else ack
+            print(f"{ts % 10**8:>10} app->engine ack={rel_ack:>7} win={win:>5} len={payload:>4} {names}")
+
+if len(sys.argv) > 3:
     from scapy.all import IP, wrpcap
-    wrpcap(sys.argv[2], [IP(r[4]) for r in records])
+    wrpcap(sys.argv[3], [IP(r[4]) for r in records])

@@ -12,6 +12,7 @@ VIRTUAL_DNS = "10.77.0.2"
 SERVER = "10.88.0.2"
 PROTECT_MARK = 0x77
 EXPECTED = json.loads(sys.argv[1])  # {"blob": sha256, "small": sha256}
+RCVBUF = int(os.environ.get("SLOW_READER_RCVBUF", "0"))
 
 results = {}
 failures = []
@@ -41,12 +42,17 @@ def dns_query(name, tcp=False):
     return socket.inet_ntoa(reply[-4:])
 
 
-def http_get(path, mark=None, slow=False):
+def http_get(path, mark=None, slow=False, ports=None):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     if mark is not None:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, mark)
+    if slow and RCVBUF:
+        # A tiny receive buffer makes the app's kernel drop segments (TCPRcvQDrop).
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RCVBUF)
     s.settimeout(20)
     s.connect((SERVER, 8080))
+    if ports is not None:
+        ports.append(s.getsockname()[1])
     s.sendall(f"GET /{path} HTTP/1.0\r\nHost: {SERVER}\r\n\r\n".encode())
     chunks = []
     while True:
@@ -79,11 +85,35 @@ for name, mark in (("download_through_tun", None), ("download_direct", PROTECT_M
     except OSError as e:
         check(name, False, type(e).__name__)
 
+SMALL = open(sys.argv[2], "rb").read() if len(sys.argv) > 2 else None
+
+
+def describe_mismatch(body):
+    if SMALL is None:
+        return "content mismatch"
+    if len(body) != len(SMALL):
+        return f"length {len(body)} != {len(SMALL)}"
+    first = next(i for i, (a, b) in enumerate(zip(body, SMALL)) if a != b)
+    return f"corrupt from byte {first}"
+
+
+FAILED_PORTS = os.environ.get("FAILED_PORTS_FILE")
+
+
 def small_download(i):
+    ports = []
     try:
-        return hashlib.sha256(http_get("small", slow=i % 2 == 1)).hexdigest()
+        body = http_get("small", slow=i % 2 == 1, ports=ports)
+        digest = hashlib.sha256(body).hexdigest()
+        result = digest if digest == EXPECTED["small"] else describe_mismatch(body)
     except OSError as e:
-        return type(e).__name__
+        result = type(e).__name__
+    if result != EXPECTED["small"]:
+        result += f" (port {ports[0] if ports else '?'})"
+        if FAILED_PORTS and ports:
+            with open(FAILED_PORTS, "a") as f:
+                f.write(f"{ports[0]}\n")
+    return result
 
 
 rounds = int(os.environ.get("PARALLEL_ROUNDS", "1"))

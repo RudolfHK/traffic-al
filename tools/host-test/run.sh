@@ -72,7 +72,8 @@ echo "== client"
 EXPECTED=$(printf '{"blob": "%s", "small": "%s"}' \
   "$(sha256sum "$WORK/www/blob" | cut -d' ' -f1)" "$(sha256sum "$WORK/www/small" | cut -d' ' -f1)")
 status=0
-ip netns exec "$CLI" python3 "$HERE/client.py" "$EXPECTED" || status=$?
+FAILED_PORTS_FILE="$WORK/failed_ports" ip netns exec "$CLI" \
+  python3 "$HERE/client.py" "$EXPECTED" "$WORK/www/small" || status=$?
 
 echo "== kernel counters"
 ip -n "$CLI" -s link show tal0 | sed -n '/RX:/,+1p'
@@ -92,5 +93,5 @@ echo "DoT listener connections: $dot_connections"
 [[ "$dot_connections" -eq 0 ]] || status=1
 
 echo "== capture"
-python3 "$HERE/analyze.py" "$WORK/batches.bin" ${PCAP_OUT:+"$PCAP_OUT"}
+python3 "$HERE/analyze.py" "$WORK/batches.bin" "$WORK/failed_ports" ${PCAP_OUT:+"$PCAP_OUT"}
 exit $status

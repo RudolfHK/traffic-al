@@ -44,6 +44,7 @@
 #define TCP_RTX_MIN_RTO_MS 200
 #define TCP_RTX_MAX_BACKOFF 5
 #define TCP_RTX_DUP_ACKS 3
+#define ZDTUN_TCP_ISN 0x77EB77EB
 #define UDP_TIMEOUT_SEC 30
 #define TCP_TIMEOUT_SEC 60
 
@@ -1462,7 +1463,7 @@ static int handle_tcp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt,
     }
 
     conn->tcp.client_seq = ntohl(data->th_seq) + 1;
-    conn->tcp.zdtun_seq = 0x77EB77EB;
+    conn->tcp.zdtun_seq = ZDTUN_TCP_ISN;
 
     if(!in_progress)
       return tcp_socket_syn(tun, conn);
@@ -1482,8 +1483,8 @@ static int handle_tcp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt,
 
   // Traffic AL: the client repeats its SYN when our SYN+ACK was lost
   if((data->th_flags & TH_SYN) && !(data->th_flags & TH_ACK) && ((seq + 1) == conn->tcp.client_seq)
-      && (conn->proxy_mode != PROXY_SOCKS5) && (tcp_outstanding(conn) == 0)
-      && (conn->tcp.zdtun_seq == conn->tcp.rtx.seq)) {
+      && (conn->proxy_mode != PROXY_SOCKS5) && (conn->tcp.zdtun_seq == ZDTUN_TCP_ISN + 1)
+      && !conn->tcp.rtx.cap && !conn->tcp.fin_ack_sent) { // only the SYN+ACK was sent so far
     conn->tcp.zdtun_seq -= 1;
     return send_syn_ack(tun, conn);
   }
