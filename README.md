@@ -99,9 +99,10 @@ Offline, from data bundled with the app (nothing is looked up online while captu
   first-party domains as advertising (google.com, facebook.com), so those count as
   tracker connections too, also from the company's own apps.
 
-The data is loaded the first time a screen needs it (about 15 MB of memory), not by a
-capture running in the background. `tools/enrichment/update.sh` downloads newer data
-and rebuilds `app/src/main/assets/enrichment` (DB-IP Lite changes monthly).
+The data is loaded the first time a screen needs it, not by a capture running in the
+background. The IP database (about 15 MB, IPv6 resolved per /64) is stored uncompressed
+in the APK and memory-mapped, so it stays off the app's heap. `tools/enrichment/update.sh`
+downloads newer data and rebuilds `app/src/main/assets/enrichment` (DB-IP Lite changes monthly).
 
 **Owner lookup** (connection detail → *Look up online*): only when you tap it, the app
 asks the DNS for the address's reverse name and [rdap.org](https://rdap.org) for its

@@ -38,6 +38,12 @@ android {
         buildConfig = true
     }
 
+    // The IP database is stored uncompressed so the app can memory-map it from the APK
+    // instead of loading it onto the heap.
+    androidResources {
+        noCompress += "bin"
+    }
+
     // Native capture engine: zdtun + JNI bridge
     externalNativeBuild {
         cmake {

@@ -14,7 +14,7 @@ class BundledDataTest {
     @Test
     fun `ip database knows big networks`() {
         val started = System.nanoTime()
-        val db = GZIPInputStream(File(assets, "ip.bin.gz").inputStream()).use { IpDatabase.read(it) }
+        val db = GZIPInputStream(File(assets, "ip.bin.gz").inputStream()).use { IpDatabase.load(it) }
         println("loaded ${db.version} in ${(System.nanoTime() - started) / 1_000_000} ms")
         assertTrue(db.version.startsWith("DB-IP Lite"))
 

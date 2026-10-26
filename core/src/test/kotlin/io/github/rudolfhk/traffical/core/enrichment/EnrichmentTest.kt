@@ -34,6 +34,9 @@ class EnrichmentTest {
     @Test
     fun `ip ranges with gaps, boundaries and IPv6`() {
         val google = Network(15169, "Google LLC")
+        val small = Network(64496, "Small")
+        val first = Network(64497, "First")
+        val second = Network(64498, "Second")
         val builder = IpDatabase.Builder("test")
         builder.addCountry(ip("1.0.0.0"), ip("1.0.0.255"), "AU")
         builder.addCountry(ip("8.8.8.0"), ip("8.8.8.255"), "US")
@@ -42,9 +45,12 @@ class EnrichmentTest {
         builder.addNetwork(ip("8.8.8.0"), ip("8.8.8.255"), google)
         builder.addNetwork(ip("8.8.9.0"), ip("8.8.9.127"), google)
         builder.addNetwork(ip("2001:4860::"), ip("2001:4860::ffff"), google) // not /64 aligned
+        builder.addNetwork(ip("2a00::8000"), ip("2a00::ffff"), small)
+        builder.addNetwork(ip("2a00:0:0:1::"), ip("2a00:0:0:1::7fff"), first)
+        builder.addNetwork(ip("2a00:0:0:1::8000"), ip("2a00:0:0:2:ffff:ffff:ffff:ffff"), second)
         builder.addNetwork(ip("255.255.255.0"), ip("255.255.255.255"), Network(1, "Last"))
         val bytes = ByteArrayOutputStream().also(builder::write).toByteArray()
-        val db = IpDatabase.read(ByteArrayInputStream(bytes))
+        val db = IpDatabase.load(ByteArrayInputStream(bytes))
 
         assertEquals("test", db.version)
         assertEquals("AU", db.country(ip("1.0.0.0")))
@@ -59,7 +65,12 @@ class EnrichmentTest {
         assertEquals("Last", db.network(ip("255.255.255.255"))?.organization)
         assertEquals("US", db.country(ip("2001:4860:4860::8888")))
         assertEquals(google, db.network(ip("2001:4860::8888")))
-        assertNull(db.network(ip("2001:4860::1:0")), "past a range that ends inside a /64")
+        assertEquals(google, db.network(ip("2001:4860::1:0")), "IPv6 resolves per /64")
+        assertNull(db.network(ip("2001:4860:0:1::")), "the next /64 is past the range")
+        assertEquals(small, db.network(ip("2a00::1")), "a /64 starting in a gap takes the value inside it")
+        assertEquals(first, db.network(ip("2a00:0:0:1::ffff")), "the first value of a /64 wins")
+        assertEquals(second, db.network(ip("2a00:0:0:2::")))
+        assertNull(db.network(ip("2a00:0:0:3::")))
         assertEquals("ZZ", db.country(ip("ffff::1")), "addresses above 2^127 compare unsigned")
         assertNull(db.country(ip("2001:4861::")))
     }

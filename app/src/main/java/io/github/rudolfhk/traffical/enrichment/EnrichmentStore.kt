@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.FileNotFoundException
 import java.io.InputStream
+import java.nio.channels.FileChannel
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.GZIPInputStream
 import kotlin.concurrent.thread
@@ -35,10 +36,27 @@ object EnrichmentStore {
         if (!started.compareAndSet(false, true)) return
         val assets = context.applicationContext.assets
         thread(name = "enrichment", isDaemon = true) {
-            val ips = read("IP database") { open(assets, "ip.bin").use(IpDatabase::read) }
+            val ips = read("IP database") { ipDatabase(assets) }
             val trackers = read("tracker list") { open(assets, "trackers.tsv").use(TrackerList::read) }
             _enrichment.value = Enrichment(ips, trackers)
         }
+    }
+
+    /**
+     * The database is about 15 MB, more than the heap some devices give an app, so it is
+     * memory-mapped straight from the APK (stored uncompressed, see app/build.gradle.kts).
+     */
+    private fun ipDatabase(assets: AssetManager): IpDatabase {
+        val buffer = try {
+            assets.openFd("enrichment/ip.bin").use { fd ->
+                fd.createInputStream().channel.use { it.map(FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.length) }
+            }
+        } catch (e: FileNotFoundException) {
+            // Compressed after all: fall back to the heap.
+            Log.w(TAG, "IP database cannot be mapped", e)
+            return open(assets, "ip.bin").use(IpDatabase::load)
+        }
+        return IpDatabase.open(buffer)
     }
 
     /**

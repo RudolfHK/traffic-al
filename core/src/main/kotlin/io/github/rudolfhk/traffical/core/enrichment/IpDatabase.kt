@@ -1,8 +1,6 @@
 package io.github.rudolfhk.traffical.core.enrichment
 
-import java.io.DataInputStream
 import java.io.DataOutputStream
-import java.io.EOFException
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -17,44 +15,119 @@ data class Network(val asn: Int, val organization: String)
 
 /**
  * Country and network of IP addresses, from range tables (built from DB-IP Lite by
- * BuildEnrichment). [version] says where the data comes from and how old it is.
+ * BuildEnrichment). The tables are searched in place, so the app can memory-map the file
+ * instead of loading it onto the heap. IPv6 is resolved per /64 network.
+ *
+ * Layout (big endian): "TALIPDB2", version, country codes, networks (AS number and the
+ * offset and length of the organization in a UTF-8 blob), the blob, then four range
+ * tables (country IPv4, country IPv6, network IPv4, network IPv6). A table is a count
+ * and sorted entries of (start, value): IPv4 starts are 32-bit, IPv6 starts the upper
+ * 64 bits of the address. An address belongs to the last entry starting at or below it;
+ * value -1 marks a gap.
  */
-class IpDatabase internal constructor(
-    val version: String,
-    private val countries: Array<String>,
-    private val networks: Array<Network>,
-    private val country4: RangeTable,
-    private val country6: RangeTable,
-    private val network4: RangeTable,
-    private val network6: RangeTable,
-) {
+class IpDatabase private constructor(buffer: ByteBuffer) {
+    private val data = buffer.duplicate()
+    val version: String
+    private val countries: Array<String>
+    private val networkCount: Int
+    private val networksAt: Int
+    private val namesAt: Int
+    private val country4: RangeTable
+    private val country6: RangeTable
+    private val network4: RangeTable
+    private val network6: RangeTable
+    private val networkCache = object : LinkedHashMap<Int, Network>(256, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Network>) = size > NETWORK_CACHE_SIZE
+    }
+
+    init {
+        val reader = data.duplicate()
+        val magic = ByteArray(MAGIC.length).also(reader::get)
+        if (String(magic, Charsets.US_ASCII) != MAGIC) throw IOException("not an IP database")
+        version = readString(reader)
+        countries = Array(reader.int) { readString(reader) }
+        networkCount = reader.int
+        networksAt = reader.position()
+        reader.position(networksAt + networkCount * NETWORK_SIZE)
+        val namesLength = reader.int
+        namesAt = reader.position()
+        reader.position(namesAt + namesLength)
+        country4 = tableAt(reader, wide = false)
+        country6 = tableAt(reader, wide = true)
+        network4 = tableAt(reader, wide = false)
+        network6 = tableAt(reader, wide = true)
+    }
+
     /** ISO 3166 country code ("US"), or null if unknown. */
-    fun country(address: InetAddress): String? = table(address, country4, country6)?.let(countries::get)
+    fun country(address: InetAddress): String? = index(address, country4, country6)?.let(countries::get)
 
-    fun network(address: InetAddress): Network? = table(address, network4, network6)?.let(networks::get)
+    fun network(address: InetAddress): Network? {
+        val index = index(address, network4, network6) ?: return null
+        synchronized(networkCache) { networkCache[index]?.let { return it } }
+        val at = networksAt + index * NETWORK_SIZE
+        val name = ByteArray(data.getInt(at + 8))
+        data.duplicate().apply { position(namesAt + data.getInt(at + 4)) }.get(name)
+        val network = Network(data.getInt(at), String(name, Charsets.UTF_8))
+        synchronized(networkCache) { networkCache[index] = network }
+        return network
+    }
 
-    private fun table(address: InetAddress, v4: RangeTable, v6: RangeTable): Int? {
-        val bytes = address.address
+    private fun index(address: InetAddress, v4: RangeTable, v6: RangeTable): Int? {
+        val key = ByteBuffer.wrap(address.address)
         val index = when (address) {
-            is Inet4Address -> v4.lookup(0, ByteBuffer.wrap(bytes).int.toLong() and 0xffffffffL)
-            is Inet6Address -> ByteBuffer.wrap(bytes).let { v6.lookup(it.long, it.long) }
+            is Inet4Address -> v4.lookup(key.int.toLong() and 0xffffffffL)
+            is Inet6Address -> v6.lookup(key.long)
             else -> -1
         }
         return index.takeIf { it >= 0 }
     }
 
-    companion object {
-        private const val MAGIC = "TALIPDB1"
+    /** One table inside [data]: [count] entries of 8 (IPv4) or 12 (IPv6) bytes from [at]. */
+    private inner class RangeTable(private val at: Int, private val count: Int, private val wide: Boolean) {
+        private val size = if (wide) 12 else 8
 
-        /** Reads the format written by [Builder.write] (uncompressed). */
-        fun read(input: InputStream): IpDatabase {
-            val data = DataInputStream(input.buffered())
-            val magic = ByteArray(MAGIC.length).also(data::readFully)
-            if (String(magic, Charsets.US_ASCII) != MAGIC) throw IOException("not an IP database")
-            val version = data.readUTF()
-            val countries = Array(readVarint(data).toInt()) { data.readUTF() }
-            val networks = Array(readVarint(data).toInt()) { Network(readVarint(data).toInt(), data.readUTF()) }
-            return IpDatabase(version, countries, networks, RangeTable.read(data), RangeTable.read(data), RangeTable.read(data), RangeTable.read(data))
+        fun lookup(key: Long): Int {
+            var low = 0
+            var high = count - 1
+            var found = -1
+            while (low <= high) {
+                val mid = (low + high) ushr 1
+                if (java.lang.Long.compareUnsigned(start(mid), key) <= 0) {
+                    found = mid
+                    low = mid + 1
+                } else {
+                    high = mid - 1
+                }
+            }
+            return if (found < 0) -1 else data.getInt(at + found * size + size - 4)
+        }
+
+        private fun start(i: Int): Long =
+            if (wide) data.getLong(at + i * size) else data.getInt(at + i * size).toLong() and 0xffffffffL
+    }
+
+    /** The table starting at [reader]'s position; moves [reader] past it. */
+    private fun tableAt(reader: ByteBuffer, wide: Boolean): RangeTable {
+        val count = reader.int
+        val table = RangeTable(reader.position(), count, wide)
+        reader.position(reader.position() + count * if (wide) 12 else 8)
+        return table
+    }
+
+    companion object {
+        private const val MAGIC = "TALIPDB2"
+        private const val NETWORK_SIZE = 12
+        private const val NETWORK_CACHE_SIZE = 4096
+
+        /** A database in [buffer] (e.g. memory-mapped), which must stay unchanged. */
+        fun open(buffer: ByteBuffer): IpDatabase = IpDatabase(buffer)
+
+        /** Reads a whole database onto the heap. */
+        fun load(input: InputStream): IpDatabase = open(ByteBuffer.wrap(input.readBytes()))
+
+        private fun readString(reader: ByteBuffer): String {
+            val bytes = ByteArray(reader.short.toInt() and 0xffff).also(reader::get)
+            return String(bytes, Charsets.UTF_8)
         }
     }
 
@@ -80,123 +153,105 @@ class IpDatabase internal constructor(
             (if (start.address.size == 4) network4 else network6) += Range(number(start), number(end), id)
         }
 
-        /** Writes the database (uncompressed; the app stores it gzipped). */
+        /** Writes the database (uncompressed; the repository keeps it gzipped). */
         fun write(output: OutputStream) {
-            val data = DataOutputStream(output)
-            data.write(MAGIC.toByteArray(Charsets.US_ASCII))
-            data.writeUTF(version)
-            writeVarint(data, countryIds.size.toLong())
-            countryIds.keys.forEach(data::writeUTF)
-            writeVarint(data, networkIds.size.toLong())
-            for (network in networkIds.keys) {
-                writeVarint(data, network.asn.toLong())
-                data.writeUTF(network.organization)
+            val out = DataOutputStream(output)
+            out.write(MAGIC.toByteArray(Charsets.US_ASCII))
+            writeString(out, version)
+            out.writeInt(countryIds.size)
+            countryIds.keys.forEach { writeString(out, it) }
+
+            val names = networkIds.keys.map { it.organization.toByteArray(Charsets.UTF_8) }
+            out.writeInt(networkIds.size)
+            var offset = 0
+            for ((i, network) in networkIds.keys.withIndex()) {
+                out.writeInt(network.asn)
+                out.writeInt(offset)
+                out.writeInt(names[i].size)
+                offset += names[i].size
             }
-            for (ranges in listOf(country4, country6, network4, network6)) RangeTable.write(data, ranges)
-            data.flush()
+            out.writeInt(offset)
+            names.forEach(out::write)
+
+            writeTable(out, starts(country4, V4_MAX), wide = false)
+            writeTable(out, slash64(starts(country6, V6_MAX)), wide = true)
+            writeTable(out, starts(network4, V4_MAX), wide = false)
+            writeTable(out, slash64(starts(network6, V6_MAX)), wide = true)
+            out.flush()
+        }
+
+        private fun writeTable(out: DataOutputStream, entries: List<Pair<BigInteger, Int>>, wide: Boolean) {
+            out.writeInt(entries.size)
+            for ((start, value) in entries) {
+                if (wide) out.writeLong(start.toLong()) else out.writeInt(start.toInt())
+                out.writeInt(value)
+            }
         }
 
         private fun number(address: InetAddress) = BigInteger(1, address.address)
+
+        private companion object {
+            val V4_MAX: BigInteger = BigInteger.ONE.shiftLeft(32) - BigInteger.ONE
+            val V6_MAX: BigInteger = BigInteger.ONE.shiftLeft(128) - BigInteger.ONE
+
+            /** Range starts with their values, and the starts of gaps (-1) between and after them. */
+            fun starts(ranges: List<Range>, max: BigInteger): List<Pair<BigInteger, Int>> {
+                val sorted = ranges.sortedBy { it.start }
+                val starts = ArrayList<Pair<BigInteger, Int>>(sorted.size + sorted.size / 4)
+                for ((i, range) in sorted.withIndex()) {
+                    if (i > 0) {
+                        val previousEnd = sorted[i - 1].end
+                        require(range.start > previousEnd) { "overlapping ranges at ${range.start}" }
+                        if (previousEnd + BigInteger.ONE < range.start) starts += (previousEnd + BigInteger.ONE) to -1
+                    }
+                    starts += range.start to range.value
+                }
+                sorted.lastOrNull()?.takeIf { it.end < max }?.let { starts += (it.end + BigInteger.ONE) to -1 }
+                return starts
+            }
+
+            /**
+             * IPv6 starts reduced to their /64 network (the upper 64 bits). A /64 takes the
+             * value at its first address, or, if that is a gap, the first known value inside
+             * it; a value starting inside a /64 that is already taken begins at the next one.
+             */
+            fun slash64(starts: List<Pair<BigInteger, Int>>): List<Pair<BigInteger, Int>> {
+                val keys = ArrayList<BigInteger>(starts.size)
+                val values = ArrayList<Int>(starts.size)
+                fun put(key: BigInteger, value: Int) {
+                    if (keys.lastOrNull() == key) {
+                        values[values.size - 1] = value
+                    } else {
+                        keys += key
+                        values += value
+                    }
+                }
+                for ((start, value) in starts) {
+                    val network = start.shiftRight(64)
+                    if (start == network.shiftLeft(64)) {
+                        put(network, value)
+                        continue
+                    }
+                    // Keys never pass network + 1, so the value at the start of this /64 is
+                    // the last or second-last one.
+                    val i = if (keys.lastOrNull()?.let { it > network } == true) keys.size - 2 else keys.size - 1
+                    val atStart = if (i >= 0) values[i] else -1
+                    put(if (atStart < 0 && value >= 0) network else network + BigInteger.ONE, value)
+                }
+                val result = ArrayList<Pair<BigInteger, Int>>(keys.size)
+                for (i in keys.indices) {
+                    if (result.lastOrNull()?.second != values[i]) result += keys[i] to values[i]
+                }
+                return result
+            }
+
+            fun writeString(out: DataOutputStream, text: String) {
+                val bytes = text.toByteArray(Charsets.UTF_8)
+                out.writeShort(bytes.size)
+                out.write(bytes)
+            }
+        }
     }
 
     internal class Range(val start: BigInteger, val end: BigInteger, val value: Int)
-}
-
-/**
- * Sorted range starts with values; an address belongs to the last range starting at or
- * below it. Starts are 128-bit numbers kept as two longs (IPv4 in [lo]); value -1 marks a
- * gap between ranges.
- */
-internal class RangeTable(private val hi: LongArray, private val lo: LongArray, private val values: IntArray) {
-
-    fun lookup(addressHi: Long, addressLo: Long): Int {
-        var low = 0
-        var high = hi.size - 1
-        var found = -1
-        while (low <= high) {
-            val mid = (low + high) ushr 1
-            if (compare(hi[mid], lo[mid], addressHi, addressLo) <= 0) {
-                found = mid
-                low = mid + 1
-            } else {
-                high = mid - 1
-            }
-        }
-        return if (found < 0) -1 else values[found]
-    }
-
-    companion object {
-        private fun compare(aHi: Long, aLo: Long, bHi: Long, bLo: Long): Int {
-            val byHi = java.lang.Long.compareUnsigned(aHi, bHi)
-            return if (byHi != 0) byHi else java.lang.Long.compareUnsigned(aLo, bLo)
-        }
-
-        private val LONG_MASK = BigInteger.ONE.shiftLeft(64) - BigInteger.ONE
-        private val MAX_ADDRESS = BigInteger.ONE.shiftLeft(128) - BigInteger.ONE
-
-        /** Entry count, then per entry: hi delta, lo (both varints), value + 1 (varint). */
-        fun write(data: DataOutputStream, ranges: List<IpDatabase.Range>) {
-            val sorted = ranges.sortedBy { it.start }
-            val starts = ArrayList<Pair<BigInteger, Int>>(sorted.size * 2)
-            for ((i, range) in sorted.withIndex()) {
-                if (i > 0) {
-                    val previousEnd = sorted[i - 1].end
-                    require(range.start > previousEnd) { "overlapping ranges at ${range.start}" }
-                    // A gap after the previous range: addresses in it are unknown.
-                    if (previousEnd + BigInteger.ONE < range.start) starts += (previousEnd + BigInteger.ONE) to -1
-                }
-                starts += range.start to range.value
-            }
-            sorted.lastOrNull()?.takeIf { it.end < MAX_ADDRESS }?.let { last -> starts += (last.end + BigInteger.ONE) to -1 }
-
-            writeVarint(data, starts.size.toLong())
-            var previousHi = 0L
-            for ((start, value) in starts) {
-                val hi = start.shiftRight(64).toLong()
-                val lo = start.and(LONG_MASK).toLong()
-                writeVarint(data, hi - previousHi)
-                writeVarint(data, lo)
-                writeVarint(data, (value + 1).toLong())
-                previousHi = hi
-            }
-        }
-
-        fun read(data: DataInputStream): RangeTable {
-            val count = readVarint(data).toInt()
-            val hi = LongArray(count)
-            val lo = LongArray(count)
-            val values = IntArray(count)
-            var previousHi = 0L
-            for (i in 0 until count) {
-                previousHi += readVarint(data)
-                hi[i] = previousHi
-                lo[i] = readVarint(data)
-                values[i] = readVarint(data).toInt() - 1
-            }
-            return RangeTable(hi, lo, values)
-        }
-    }
-}
-
-/** Unsigned LEB128. */
-internal fun writeVarint(out: DataOutputStream, value: Long) {
-    var v = value
-    while (v and 0x7fL.inv() != 0L) {
-        out.writeByte(((v and 0x7f) or 0x80).toInt())
-        v = v ushr 7
-    }
-    out.writeByte(v.toInt())
-}
-
-internal fun readVarint(input: DataInputStream): Long {
-    var result = 0L
-    var shift = 0
-    while (true) {
-        val b = input.read()
-        if (b < 0) throw EOFException()
-        result = result or ((b and 0x7f).toLong() shl shift)
-        if (b and 0x80 == 0) return result
-        shift += 7
-        if (shift > 63) throw IOException("varint too long")
-    }
 }

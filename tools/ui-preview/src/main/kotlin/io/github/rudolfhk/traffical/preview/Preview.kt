@@ -282,7 +282,7 @@ private class Sample(private val assets: File) {
 
     /** The app's bundled offline data, read from the repository. */
     private val enrichment = Enrichment(
-        GZIPInputStream(File(assets, "ip.bin.gz").inputStream()).use(IpDatabase::read),
+        GZIPInputStream(File(assets, "ip.bin.gz").inputStream()).use(IpDatabase::load),
         GZIPInputStream(File(assets, "trackers.tsv.gz").inputStream()).use(TrackerList::read),
     )
 

@@ -31,4 +31,11 @@ class EnrichmentDeviceTest {
         assertTrue(google.tracker!!.tracking)
         assertNotNull(enrichment.destination(InetAddress.getByName("2606:4700:4700::1111"), null).network)
     }
+
+    @Test
+    fun ipDatabaseIsStoredUncompressed() {
+        // Only an uncompressed asset can be memory-mapped; otherwise it would load onto the heap.
+        val assets = InstrumentationRegistry.getInstrumentation().targetContext.assets
+        assets.openFd("enrichment/ip.bin").use { assertTrue(it.length > 1_000_000) }
+    }
 }
