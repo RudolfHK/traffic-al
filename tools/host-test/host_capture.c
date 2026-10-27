@@ -14,6 +14,7 @@
 #include <linux/if_tun.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 
@@ -31,9 +32,17 @@ static int resolve_uid(void *userdata, const zdtun_5tuple_t *tuple) {
 }
 
 static void on_packets(void *userdata, const uint8_t *batch, size_t length) {
+  static long delay_us = -1;
+
   fwrite(batch, 1, length, batch_file);
   num_batches++;
   num_bytes += length;
+
+  /* BATCH_DELAY_US: time the app spends per batch on the capture thread (JNI, Kotlin). */
+  if(delay_us < 0)
+    delay_us = getenv("BATCH_DELAY_US") ? atol(getenv("BATCH_DELAY_US")) : 0;
+  if(delay_us > 0)
+    usleep(delay_us);
 }
 
 /* Marked sockets bypass the TUN (like VpnService.protect on Android). */
