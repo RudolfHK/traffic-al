@@ -108,6 +108,23 @@ def download_after_half_close():
     return data[data.index(b"\r\n\r\n") + 4:]
 
 
+def banner(_):
+    """Reads what a server that speaks first sends (256 KB, then it closes)."""
+    try:
+        with socket.create_connection((SERVER, 8082), timeout=20) as s:
+            received = 0
+            while chunk := s.recv(1 << 16):
+                received += len(chunk)
+        return received
+    except OSError as e:
+        return type(e).__name__
+
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+    banners = list(pool.map(banner, range(int(os.environ.get("BANNER_ROUNDS", "40")))))
+short = [b for b in banners if b != 256 * 1024]
+check("server_speaks_first", not short, f"{len(banners)} connections, incomplete: {short}")
+
 try:
     body = download_after_half_close()
     check("download_after_half_close", hashlib.sha256(body).hexdigest() == EXPECTED["blob"], f"{len(body)} bytes")

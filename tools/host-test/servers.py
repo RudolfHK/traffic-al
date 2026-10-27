@@ -57,6 +57,16 @@ class CountingSink(socketserver.BaseRequestHandler):
         self.request.sendall(str(total).encode())
 
 
+BANNER = os.urandom(256 * 1024)
+
+
+class Banner(socketserver.BaseRequestHandler):
+    """Speaks first, like SSH or SMTP servers: sends BANNER as soon as it accepts, then closes."""
+
+    def handle(self):
+        self.request.sendall(BANNER)
+
+
 class DotListener(socketserver.BaseRequestHandler):
     def handle(self):
         with open(DOT_LOG, "a") as f:
@@ -82,6 +92,7 @@ threading.Thread(target=udp_dns, daemon=True).start()
 threading.Thread(target=Server((ADDR, 53), TcpDns).serve_forever, daemon=True).start()
 threading.Thread(target=Server((ADDR, 853), DotListener).serve_forever, daemon=True).start()
 threading.Thread(target=Server((ADDR, 8081), CountingSink).serve_forever, daemon=True).start()
+threading.Thread(target=Server((ADDR, 8082), Banner).serve_forever, daemon=True).start()
 
 os.chdir(WEBROOT)
 handler = http.server.SimpleHTTPRequestHandler

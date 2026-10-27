@@ -5,14 +5,16 @@ budgets and the reasoning are in [PROMPT.md](PROMPT.md#performance-check-improve
 page has the results, what they found and what was changed.
 
 **Verdict.** Forwarding and processing are fast enough. A single core handles more than a
-phone's network can deliver. But the check found five problems that made the app work
+phone's network can deliver. But the check found six problems that made the app work
 worse than it should, all fixed:
 
 1. Connections without traffic for 60 s were **reset** (push notifications, messengers).
 2. Above 128 open connections, the oldest ones were **reset**.
-3. Uploads that end with a half close **lost data** and were reset.
-4. Every packet took longer the more connections were open (300 open: −30%).
-5. The capture thread, which also forwards all traffic, built the UI's connection list
+3. Servers that speak first (SSH, SMTP, IMAP, FTP) could **lose their first data**,
+   silently: up to 256 KB, or the whole greeting. Found by the download on the emulator.
+4. Uploads that end with a half close **lost data** and were reset.
+5. Every packet took longer the more connections were open (300 open: −30%).
+6. The capture thread, which also forwards all traffic, built the UI's connection list
    on every batch and held its lock while the dashboard was computed. The packet buffer
    ignored the heap limit: 64 MB of packets on a device that grants 16 MB.
 
@@ -47,18 +49,24 @@ Cortex-A76) is roughly 2–3 times slower for this work.
 | Download with 300 connections open | 1,534 Mbit/s (109 open) | 2,323 Mbit/s | ≥ 1,000 |
 | Connection idle for 75 s | **reset** | works | works |
 | Upload ending with a half close (`run.sh`) | **reset, data lost** | complete | complete |
+| Server that speaks first, 200 connections (`run.sh`) | **2 lost their 256 KB greeting** | all complete | all complete |
 | Wake-ups with no traffic | 4/s | 4/s | ≤ 5/s |
 | Engine CPU per GB downloaded | 3.7 s | 3.9 s | |
 
 The engine's throughput is bounded by one core: 3.9 CPU-seconds per GB means about
 2 Gbit/s per x86 core, so several hundred Mbit/s on the phone's core before the Kotlin
-side (below) takes its share.
+side (below) takes its share. That share matters: the batches are handled on the same
+thread, so the time per batch directly costs forwarding. Simulated with
+`BATCH_DELAY_US` on the host, 50 ms per batch brings a download down to 74 Mbit/s;
+the measured Kotlin time per batch is far below that (next section).
 
 What changed (details in
 [TRAFFIC_AL_CHANGES.md](../app/src/main/cpp/zdtun/TRAFFIC_AL_CHANGES.md)):
 - Idle timeouts as a NAT must at least allow: TCP 2 h 4 min (RFC 5382), 4 min after a
   close, UDP 2 min (RFC 4787). Before: TCP 60 s, UDP 30 s.
 - Up to 512 sockets instead of 128. An idle connection frees its retransmission buffer.
+- A connecting socket that is readable and writable at once completes the connection
+  (SYN+ACK to the app) before its data is read. The app's SYN window is no longer scaled.
 - The app's FIN waits until the data queued for the server is sent. A connection both
   sides have closed is kept until the app has acknowledged everything, so lost segments
   can still be resent (before, up to 256 KB in flight were dropped with it).

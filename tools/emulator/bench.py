@@ -24,9 +24,6 @@ SIZE_MB = int(os.environ.get("BENCH_MB", "100"))
 HOST = os.environ.get("BENCH_HOST", "10.0.2.2")  # this machine, as seen from the emulator
 PORT = int(os.environ.get("BENCH_PORT", "8765"))
 ROUNDS = 3
-# The server waits this long before closing: the emulator's user-mode network loses data
-# it still buffers when the server closes (also without the VPN). Not counted in the time.
-DRAIN_SECONDS = 2.0
 MIN_SHARE = float(os.environ.get("BENCH_MIN_SHARE", "0"))  # capture throughput / direct
 
 
@@ -48,7 +45,6 @@ def serve():
             left = SIZE_MB * 1024 * 1024
             while left > 0:
                 left -= conn.send(memoryview(block)[:min(left, len(block))])
-            time.sleep(DRAIN_SECONDS)
 
     def accept():
         while True:
@@ -69,7 +65,7 @@ def download():
     out = nc.stdout.read()
     nc.wait()
     nc.stdin.close()
-    elapsed = time.monotonic() - start - DRAIN_SECONDS
+    elapsed = time.monotonic() - start
     received = int(out.strip() or 0)
     if received != SIZE_MB * 1024 * 1024:
         raise RuntimeError(f"download incomplete: {received} bytes")

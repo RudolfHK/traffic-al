@@ -694,14 +694,6 @@ void zdtun_conn_close(zdtun_t *tun, zdtun_conn_t *conn, zdtun_conn_status_t stat
   if(conn->status >= CONN_STATUS_CLOSED)
     return;
 
-  // TRACE (temporary): how a TCP connection that carried data ends
-  if((conn->tuple.ipproto == IPPROTO_TCP) && (conn->tcp.zdtun_seq - ZDTUN_TCP_ISN > 100000)) {
-    char buf[256];
-    log("TRACE close status=%d sent=%u acked=%u rtx_len=%u fin_sent=%d client_closed=%d sock=%d %s", status,
-        conn->tcp.zdtun_seq - ZDTUN_TCP_ISN - 1, conn->tcp.rtx.seq - ZDTUN_TCP_ISN - 1, conn->tcp.rtx.len,
-        conn->tcp.fin_ack_sent, conn->tcp.client_closed, conn->sock, zdtun_5tuple2str(&conn->tuple, buf, sizeof(buf)));
-  }
-
   if(conn->tuple.ipproto == IPPROTO_UDP) {
     udp_mapping_t *mapping;
     uint32_t key = udp_mapping_key(&conn->tuple);
@@ -944,7 +936,6 @@ static int tcp_client_ack(zdtun_t *tun, zdtun_conn_t *conn, u_int32_t ack,
     // A duplicate ACK: the client misses the segment at rtx->seq
     if((l7_len == 0) && (win == last_win) && !(flags & (TH_SYN | TH_FIN | TH_RST))
         && (++rtx->dup_acks == TCP_RTX_DUP_ACKS)) {
-      log("TRACE fast retransmit acked=%u outstanding=%u rtx_len=%u", ack - ZDTUN_TCP_ISN - 1, outstanding, rtx->len);
       rtx->in_recovery = 1;
       rtx->recover = conn->tcp.zdtun_seq;
       return tcp_retransmit(tun, conn, conn->tcp.mss);
@@ -998,8 +989,6 @@ void zdtun_tcp_retransmit_timeouts(zdtun_t *tun) {
       continue;
 
     debug("TCP retransmission timeout, resending %u bytes", rtx->len);
-    log("TRACE timeout acked=%u outstanding=%u rtx_len=%u backoff=%d", rtx->seq - ZDTUN_TCP_ISN - 1,
-        tcp_outstanding(conn), rtx->len, rtx->backoff);
 
     rtx->in_recovery = 1;
     rtx->recover = conn->tcp.zdtun_seq;
@@ -1491,8 +1480,9 @@ static int handle_tcp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt,
 
     debug("MSS: %d, scale: %d\n", mss, scale);
 
-    conn->tcp.window_size = min(((u_int32_t) ntohs(data->th_win)) << scale,
-      (u_int32_t) TCP_RTX_MAX_UNACKED); // Traffic AL
+    // Traffic AL: a SYN's window is never scaled (RFC 7323); upstream scaled it, so up to
+    // 256 KB could go out before the client's first ACK, beyond its 64 KB window
+    conn->tcp.window_size = min((u_int32_t) ntohs(data->th_win), (u_int32_t) TCP_RTX_MAX_UNACKED);
     conn->tcp.window_scale = scale;
     conn->tcp.mss = mss;
 
@@ -2046,9 +2036,6 @@ static int handle_tcp_reply(zdtun_t *tun, zdtun_conn_t *conn) {
     return close_with_socket_error(tun, conn, "TCP recv");
   else if(l4_len == 0) {
     debug("Server socket closed");
-    if(conn->tcp.zdtun_seq - ZDTUN_TCP_ISN > 100000) // TRACE (temporary)
-      log("TRACE server closed sent=%u acked=%u rtx_len=%u window=%u", conn->tcp.zdtun_seq - ZDTUN_TCP_ISN - 1,
-          conn->tcp.rtx.seq - ZDTUN_TCP_ISN - 1, conn->tcp.rtx.len, conn->tcp.window_size);
 
     if(!conn->tcp.fin_ack_sent) {
       tcp_socket_fin_ack(tun, conn);
@@ -2284,7 +2271,14 @@ int zdtun_handle_fd(zdtun_t *tun, const fd_set *rd_fds, const fd_set *wr_fds) {
 #endif
     uint8_t ipproto = conn->tuple.ipproto;
 
-    if(FD_ISSET(conn->sock, rd_fds)) {
+    if((ipproto == IPPROTO_TCP) && (conn->status == CONN_STATUS_CONNECTING)) {
+      // Traffic AL: a server that speaks first (SSH, SMTP, ...) makes the connecting
+      // socket readable and writable at once. Upstream read the data first and sent it
+      // before the SYN+ACK: the client dropped it, and the SYN+ACK's sequence number
+      // skipped it. Complete the connection first; the data is read in the next round.
+      if(FD_ISSET(conn->sock, rd_fds) || FD_ISSET(conn->sock, wr_fds))
+        rv = handle_tcp_connect_async(tun, conn);
+    } else if(FD_ISSET(conn->sock, rd_fds)) {
       if(ipproto == IPPROTO_TCP)
         rv = handle_tcp_reply(tun, conn);
       else if(ipproto == IPPROTO_UDP)

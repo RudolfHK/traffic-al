@@ -218,7 +218,8 @@ to `tools/ui-preview/build/screens/*.png` (light and dark). CI uploads these as 
 
 The host test builds the engine (with nDPI) on Linux, routes a network namespace
 through a real TUN device and checks DNS over UDP/TCP, a 50 MB download (checksum), a
-download and an upload with a half close, 80 parallel connections (half of them slow readers),
+download and an upload with a half close, a server that speaks first (40 connections),
+80 parallel connections (half of them slow readers),
 TLS, a QUIC Initial, DoT blocking and app attribution of every captured packet, while
 dropping 0.5% of the packets to the app on purpose (`DROP_RATE`).
 

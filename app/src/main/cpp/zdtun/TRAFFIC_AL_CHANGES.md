@@ -57,6 +57,14 @@ The engine benchmark (`tools/host-test/bench.sh`) found these, now changed:
   closed when the app has acknowledged everything, including the FIN (found while
   reviewing the half-close path; rare, as a segment to the app must be lost at the very
   end).
+- **Servers that speak first lost their first data**: a server that sends as soon as it
+  accepts (SSH, SMTP, IMAP, FTP banners) makes the connecting socket readable and
+  writable at once. zdtun read the data first and sent it to the app before the SYN+ACK;
+  the app dropped it, and the SYN+ACK's sequence number skipped it, so the stream arrived
+  shorter without any error (up to 256 KB; a banner was lost completely). The connection
+  is now completed first. `run.sh` opens 40 such connections (2 of 200 lost everything
+  before). Also, the window of the app's SYN is no longer scaled (RFC 7323), which let up
+  to 256 KB go out before the app's first ACK.
 - **Every packet cost time per open connection**: `zdtun_handle_fd()` iterated over all
   connections; it now looks the ready sockets up by fd. `on_socket_close` is called
   before the socket is closed (as documented), so the engine can keep an epoll set in
