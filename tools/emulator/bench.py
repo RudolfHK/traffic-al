@@ -44,14 +44,22 @@ def serve(directory):
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
 
+SHORT = []  # bytes missing at the end of downloads
+
+
 def download():
     """Mbit/s of one download in adb shell; the time includes adb's own overhead."""
     start = time.monotonic()
     out = shell(f"printf 'GET /blob HTTP/1.0\\r\\n\\r\\n' | nc {HOST} {PORT} | wc -c")
     elapsed = time.monotonic() - start
-    received = int(out.strip() or 0)
-    if received < SIZE_MB * 1024 * 1024:
-        raise RuntimeError(f"download incomplete: {received} bytes")
+    missing = max(0, SIZE_MB * 1024 * 1024 - int(out.strip() or 0))
+    # nc closes its sending side after the request, and the emulator's user-mode network
+    # sometimes drops the last kilobyte of such a download, also without the VPN. The
+    # host test checks complete downloads (checksums); this one measures speed.
+    if missing > 64 * 1024:
+        raise RuntimeError(f"download incomplete: {missing} bytes missing")
+    if missing:
+        SHORT.append(missing)
     return SIZE_MB * 8 * 1.048576 / elapsed
 
 
@@ -141,6 +149,7 @@ def main():
         results["memory_capture_app_open"] = memory()
 
         results["app_process_survived"] = pid() == process
+        results["downloads_short_bytes"] = SHORT
         results["download_capture_share"] = round(results["download_capture_mbps"] / results["download_direct_mbps"], 2)
 
         shell(f"su 0 am startservice -n {SERVICE} -a {PACKAGE}.STOP")
