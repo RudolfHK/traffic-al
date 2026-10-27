@@ -117,6 +117,20 @@ fun SettingsScreen(
             )
         }
 
+        item { SectionTitle(text.settingsDecryption) }
+        item {
+            SwitchRow(
+                title = text.settingsDecryptionEmbed,
+                subtitle = text.settingsDecryptionEmbedHint,
+                checked = settings.embedTlsKeys,
+                onCheckedChange = { on -> onChange { it.copy(embedTlsKeys = on) } },
+            )
+        }
+        if (settings.embedTlsKeys) {
+            item { Hint(text.settingsDecryptionKeys.format(background.tlsKeySessions)) }
+        }
+        item { Hint(text.settingsDecryptionHint.format(background.tlsKeyLogPath)) }
+
         item { SectionTitle(text.settingsPrivacy) }
         item {
             SwitchRow(

@@ -261,10 +261,14 @@ object CaptureRepository {
     fun exportPcapng(out: OutputStream): Int {
         val snapshot = synchronized(lock) { packets.toList() }
         PcapngWriter(out.buffered()).use { writer ->
+            writer.writeTlsKeyLog(tlsKeyLog())
             for (record in snapshot) writer.writePacket(record.timestampMicros, record.packet, comment = packetComment(record))
         }
         return snapshot.size
     }
+
+    /** The owner-supplied TLS key log to embed in exports, or "" when decryption is off. */
+    private fun tlsKeyLog(): String = if (SettingsStore.settings.value.embedTlsKeys) TlsKeyStore.text() else ""
 
     /** Saved recordings, newest first. Reads the storage. */
     fun recordings(): List<RecordingItem> {
@@ -286,7 +290,7 @@ object CaptureRepository {
     fun exportRecording(name: String, out: OutputStream): ExportResult? {
         out.buffered().use { buffered ->
             val (store, recording) = recorder.finishedRecording(name).get() ?: return null
-            return store.export(recording, buffered)
+            return store.export(recording, buffered, tlsKeyLog = tlsKeyLog())
         }
     }
 

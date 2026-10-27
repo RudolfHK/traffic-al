@@ -99,6 +99,11 @@
     <string name="settings_record_to_storage_hint">Encrypted PCAPNG files with the app of each packet, in the app\'s private storage. Export them under Recordings.</string>
     <string name="settings_storage_limit">Storage limit</string>
     <string name="settings_storage_limit_hint">When the recordings reach the limit, the oldest packets are deleted.</string>
+    <string name="settings_decryption">TLS decryption</string>
+    <string name="settings_decryption_embed">Embed TLS keys into exports</string>
+    <string name="settings_decryption_embed_hint">Recordings and exports carry the TLS keys for the sessions in them, so Wireshark shows that traffic decrypted. The keys stay inside the exported file.</string>
+    <string name="settings_decryption_keys">Key log: %1$d TLS sessions.</string>
+    <string name="settings_decryption_hint">The app never derives keys. It reads a key log you place at %1$s — from your own app built with SSLKEYLOGFILE, or a key log written with root. Pinned apps stay opaque. See docs/DECRYPTION.md.</string>
     <string name="settings_about">About</string>
     <string name="settings_version">Traffic AL %1$s · GPL-3.0-or-later. No analytics: captured data stays on the phone unless you export it.</string>
     <string name="recordings_title">Recordings</string>

@@ -194,6 +194,11 @@ try:
     tls = ssl.create_default_context()
     tls.check_hostname = False
     tls.verify_mode = ssl.CERT_NONE
+    # Like an app built with SSLKEYLOGFILE: write this session's TLS keys so the capture
+    # can be decrypted (tools/host-test/validate.sh, docs/PERFORMANCE.md phase 8).
+    keylog = os.environ.get("TLS_KEYLOG")
+    if keylog:
+        tls.keylog_filename = keylog
     with socket.create_connection((SERVER, 8443), timeout=5) as raw, \
             tls.wrap_socket(raw, server_hostname="tls.example.test") as s:
         s.sendall(b"GET /small HTTP/1.0\r\nHost: tls.example.test\r\n\r\n")

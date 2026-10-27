@@ -92,6 +92,32 @@ Measured as:
   itself), compared with the same download without the VPN, plus the capture pipeline on
   ART with the emulator's heap limit.
 
+## Phase 8 (improved)
+
+The request was *"Continue with phase 8"*, whose plan named *"TLS decryption (optional,
+limited): local CA on device, in-app or mitmproxy-based MITM for selected apps,
+SSLKEYLOGFILE-style key export into the PCAPNG, system CA via Magisk on root, pinned apps
+stay opaque."*
+
+The guiding decision: **Traffic AL never breaks cryptography and never terminates or forges
+a TLS connection.** It only shows plaintext for sessions whose keys the device owner
+already has, and packages those keys into the recording. That keeps the feature a genuine
+self-audit (you decrypt your own device's traffic, with keys you obtained), not an
+interception tool, and it is what Wireshark's own workflow does.
+
+| Plan | Improved | Why |
+| --- | --- | --- |
+| In-app TLS-terminating proxy that MITMs selected apps | **Not built.** The app embeds a key log the owner supplies as a PCAPNG *Decryption Secrets Block*; Wireshark decrypts from it | A built-in proxy that forges leaf certificates is the interception machinery this tool should not be, needs a device to develop against, and still cannot read pinned apps. Packaging owner-supplied keys reads the same traffic without Traffic AL ever touching the TLS. |
+| Local CA generated on device | **Not built into the app.** The owner uses their own tooling (e.g. mitmproxy, which makes its own CA) | If Traffic AL doesn't run the proxy, generating a CA inside it adds the forging material for no gain. The owner's proxy already has a CA; Traffic AL just reads the key log it writes. |
+| Install the CA into the system store via a Magisk module | `tools/decryption/system-ca.sh` builds a Magisk module from a CA **the owner generated**, for their rooted phone | Standard rooted self-audit. It only places one file; it changes no TLS and no app. |
+| SSLKEYLOGFILE-style key export into the PCAPNG | **Built and tested.** `core` parses the NSS key log, matches it to the captured sessions by client random, and writes the DSB; the app embeds it on export | This is the part that makes a recording openable decrypted, and it is fully verifiable without a phone. |
+| networkSecurityConfig for own debug apps | Documented snippet for the owner's **own** app (docs/DECRYPTION.md), not added to Traffic AL | Trusting user CAs in Traffic AL would only weaken its own traffic; the config belongs in the app being audited. |
+
+Built and tested (`tools/host-test`, `core`): a real TLS 1.3 session is captured with an
+`SSLKEYLOGFILE` (as an app built with it would write), its keys are embedded as a DSB with
+the app's own code, and `tshark` decrypts the HTTPS from the embedded keys alone. See
+[DECRYPTION.md](DECRYPTION.md). Pinned apps stay opaque, by design.
+
 ## The prompt
 
 ```markdown
@@ -250,10 +276,15 @@ no Wi-Fi monitor mode, no capturing other devices.
 ## Recommended usage
 
 - Start each Claude Code session with the prompt above plus "Implement phase N".
-- Phases 1 to 7 are implemented in this repository (phase 3 with nDPI 5.0 for
+- Phases 1 to 8 are implemented in this repository (phase 3 with nDPI 5.0 for
   protocol/service detection and QUIC/HTTP server names; flows and recordings are checked
   against tshark in CI, the encrypted storage and the bundled data on an Android 10
-  emulator). Continue with **8** (TLS decryption).
+  emulator; phase 8 as the decryption-secrets pipeline above, decryption verified with
+  tshark in CI). Continue with **9** (validation).
+- Decision taken for 8: Traffic AL embeds an owner-supplied TLS key log so Wireshark
+  decrypts the recording, and does not build a TLS-terminating proxy or generate a CA
+  (docs/DECRYPTION.md). The "phases 6–10" in the table above is the original numbering; the
+  phase list ends at 9.
 - Decision taken for 4: the throughput chart is drawn with a Compose `Canvas` instead of
   Vico. The screens are shared with a Compose Desktop preview tool (tools/ui-preview)
   that renders them in CI without the Android SDK, and an area chart of two series does

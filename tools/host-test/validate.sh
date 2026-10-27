@@ -17,3 +17,11 @@ python3 "$HERE/validate_flows.py" "$OUT/capture.pcapng" "$OUT/flows.json"
 
 "$HERE/../../gradlew" -q -p "$HERE/../../core" exportCheck --args="$WORK/batches.bin $OUT"
 python3 "$HERE/validate_export.py" "$OUT"
+
+# phase 8: the TLS leg's session keys, embedded as a PCAPNG Decryption Secrets Block,
+# let tshark decrypt the HTTPS in the capture.
+if [[ -s "$WORK/keylog.txt" ]]; then
+  "$HERE/../../gradlew" -q -p "$HERE/../../core" decryptCheck \
+    --args="$WORK/batches.bin $WORK/keylog.txt $OUT/decrypted.pcapng"
+  python3 "$HERE/validate_decrypt.py" "$OUT/decrypted.pcapng"
+fi

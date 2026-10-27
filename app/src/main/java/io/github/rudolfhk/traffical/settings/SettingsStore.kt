@@ -15,6 +15,7 @@ object SettingsStore {
     private const val START_ON_BOOT = "start_on_boot"
     private const val RECORD = "record_to_storage"
     private const val STORAGE_LIMIT_MB = "storage_limit_mb"
+    private const val EMBED_TLS_KEYS = "embed_tls_keys"
     private const val CAPTURE_WANTED = "capture_wanted"
 
     private lateinit var prefs: SharedPreferences
@@ -36,6 +37,7 @@ object SettingsStore {
             .putBoolean(START_ON_BOOT, updated.startOnBoot)
             .putBoolean(RECORD, updated.recordToStorage)
             .putInt(STORAGE_LIMIT_MB, updated.storageLimitMb)
+            .putBoolean(EMBED_TLS_KEYS, updated.embedTlsKeys)
             .apply()
         _settings.value = updated
     }
@@ -57,6 +59,7 @@ object SettingsStore {
             startOnBoot = prefs.getBoolean(START_ON_BOOT, defaults.startOnBoot),
             recordToStorage = prefs.getBoolean(RECORD, defaults.recordToStorage),
             storageLimitMb = prefs.getInt(STORAGE_LIMIT_MB, defaults.storageLimitMb),
+            embedTlsKeys = prefs.getBoolean(EMBED_TLS_KEYS, defaults.embedTlsKeys),
         )
     }
 

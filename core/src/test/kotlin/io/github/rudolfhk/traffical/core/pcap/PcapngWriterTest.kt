@@ -47,6 +47,32 @@ class PcapngWriterTest {
     }
 
     @Test
+    fun `writes a TLS key-log decryption secrets block before the packets`() {
+        val keyLog = "CLIENT_RANDOM ${"a".repeat(64)} ${"1".repeat(96)}\n"
+        val out = ByteArrayOutputStream()
+        PcapngWriter(out).use {
+            it.writeTlsKeyLog(keyLog)
+            it.writePacket(5L, ByteArray(21) { 1 })
+        }
+
+        val blocks = blocks(out.toByteArray())
+        assertEquals(listOf(0x0A0D0D0A, 1, 0x0A, 6), blocks.map { it.first })
+
+        val dsb = blocks[2].second
+        assertEquals(0x544C534B, dsb.getInt(8)) // secrets type "TLSK"
+        assertEquals(keyLog.length, dsb.getInt(12)) // secrets length
+        val secrets = ByteArray(keyLog.length).also { dsb.position(16); dsb.get(it) }
+        assertEquals(keyLog, String(secrets, Charsets.US_ASCII))
+    }
+
+    @Test
+    fun `empty key-log writes no block`() {
+        val out = ByteArrayOutputStream()
+        PcapngWriter(out).use { it.writeTlsKeyLog("") }
+        assertContentEquals(Pcapng.header(), out.toByteArray())
+    }
+
+    @Test
     fun `writer output is header plus packet blocks`() {
         val packet = ByteArray(21) { 1 }
         val out = ByteArrayOutputStream()

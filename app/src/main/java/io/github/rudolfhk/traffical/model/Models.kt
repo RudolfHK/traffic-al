@@ -34,6 +34,8 @@ data class AppSettings(
     val recordToStorage: Boolean = true,
     /** Megabytes of 1,000,000 bytes, like the sizes shown everywhere in the app. */
     val storageLimitMb: Int = 1000,
+    /** Embed the owner-supplied TLS key log into exports so Wireshark can decrypt them. */
+    val embedTlsKeys: Boolean = false,
 ) {
     val storageLimitBytes: Long get() = storageLimitMb * 1_000_000L
 
@@ -75,6 +77,10 @@ data class BackgroundInfo(
     /** Versions of the bundled IP and tracker data, null until loaded. */
     val ipData: String? = null,
     val trackerData: String? = null,
+    /** Where the owner places a TLS key log for decryption (phase 8). */
+    val tlsKeyLogPath: String = "",
+    /** TLS sessions the placed key log covers. */
+    val tlsKeySessions: Int = 0,
 )
 
 /** The app lock as the settings show it. */

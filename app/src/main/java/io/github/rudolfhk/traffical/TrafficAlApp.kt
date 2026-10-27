@@ -2,6 +2,7 @@ package io.github.rudolfhk.traffical
 
 import android.app.Application
 import io.github.rudolfhk.traffical.capture.CaptureRepository
+import io.github.rudolfhk.traffical.capture.TlsKeyStore
 import io.github.rudolfhk.traffical.security.AppLock
 import io.github.rudolfhk.traffical.security.Keys
 import io.github.rudolfhk.traffical.settings.SettingsStore
@@ -12,6 +13,7 @@ class TrafficAlApp : Application() {
         super.onCreate()
         SettingsStore.init(this)
         Keys.init(this)
+        TlsKeyStore.init(this)
         AppLock.init(this)
         CaptureRepository.init(this)
     }

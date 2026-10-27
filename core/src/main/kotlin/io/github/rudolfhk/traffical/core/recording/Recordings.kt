@@ -70,11 +70,19 @@ class RecordingStore(val root: File, val codec: SegmentCodec) {
      * Writes the segments of [recording] as one PCAPNG stream, except [exclude] (the segment
      * still being written). Only complete PCAPNG blocks are copied: a segment that ends
      * early or fails to decrypt contributes what it has up to there.
+     *
+     * [tlsKeyLog] (NSS SSLKEYLOGFILE text, supplied by the device owner) is written first as
+     * a Decryption Secrets Block so Wireshark decrypts the TLS sessions it has keys for; its
+     * keys apply across all the sections that follow. Empty means no decryption data.
      */
-    fun export(recording: Recording, out: OutputStream, exclude: File? = null): ExportResult {
+    fun export(recording: Recording, out: OutputStream, exclude: File? = null, tlsKeyLog: String = ""): ExportResult {
         var bytes = 0L
         var packets = 0L
         var damaged = 0
+        if (tlsKeyLog.isNotEmpty()) {
+            out.write(Pcapng.header())
+            out.write(Pcapng.tlsKeyLog(tlsKeyLog))
+        }
         for (segment in recording.segments) {
             if (segment == exclude) continue
             val copy = try {

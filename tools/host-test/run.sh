@@ -54,7 +54,8 @@ echo "== client"
 EXPECTED=$(printf '{"blob": "%s", "small": "%s"}' \
   "$(sha256sum "$WORK/www/blob" | cut -d' ' -f1)" "$(sha256sum "$WORK/www/small" | cut -d' ' -f1)")
 status=0
-FAILED_PORTS_FILE="$WORK/failed_ports" ip netns exec "$CLI" \
+: > "$WORK/keylog.txt" # the TLS leg writes its session keys here (SSLKEYLOGFILE format)
+FAILED_PORTS_FILE="$WORK/failed_ports" TLS_KEYLOG="$WORK/keylog.txt" ip netns exec "$CLI" \
   "$PYTHON" "$HERE/client.py" "$EXPECTED" "$WORK/www/small" || status=$?
 
 echo "== kernel counters"

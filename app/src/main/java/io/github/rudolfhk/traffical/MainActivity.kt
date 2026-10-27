@@ -32,6 +32,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import io.github.rudolfhk.traffical.capture.CaptureRepository
+import io.github.rudolfhk.traffical.capture.TlsKeyStore
 import io.github.rudolfhk.traffical.enrichment.EnrichmentStore
 import io.github.rudolfhk.traffical.model.BackgroundInfo
 import io.github.rudolfhk.traffical.model.ThemeMode
@@ -264,6 +265,8 @@ class MainActivity : FragmentActivity() {
         appVersion = BuildConfig.VERSION_NAME,
         ipData = EnrichmentStore.current?.ips?.version,
         trackerData = EnrichmentStore.current?.trackers?.version,
+        tlsKeyLogPath = TlsKeyStore.path,
+        tlsKeySessions = TlsKeyStore.sessionCount(),
     )
 
     companion object {

@@ -48,6 +48,12 @@ tasks.register<JavaExec>("exportCheck") {
     mainClass.set("io.github.rudolfhk.traffical.core.tools.ExportCheckKt")
 }
 
+tasks.register<JavaExec>("decryptCheck") {
+    description = "Writes a host-test capture as PCAPNG with a TLS key-log for decryption (see tools/host-test)."
+    classpath = tools.runtimeClasspath
+    mainClass.set("io.github.rudolfhk.traffical.core.tools.DecryptCheckKt")
+}
+
 tasks.register<JavaExec>("benchmark") {
     description = "Measures the Kotlin capture pipeline, UI work and recording (see docs/PERFORMANCE.md)."
     classpath = tools.runtimeClasspath

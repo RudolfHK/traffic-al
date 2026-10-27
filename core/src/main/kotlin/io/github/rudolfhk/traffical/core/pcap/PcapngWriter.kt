@@ -23,6 +23,16 @@ class PcapngWriter(
         out.write(Pcapng.header(application, interfaceName, snapLength))
     }
 
+    /**
+     * Writes a TLS key-log Decryption Secrets Block. Wireshark uses it to decrypt the TLS
+     * sessions these keys belong to. Call it right after construction, before the packets:
+     * a DSB applies to the packets that follow it. Does nothing for an empty key log.
+     */
+    fun writeTlsKeyLog(keyLog: String) {
+        if (keyLog.isEmpty()) return
+        out.write(Pcapng.tlsKeyLog(keyLog))
+    }
+
     /** Writes one packet; [comment] shows up as the packet comment in Wireshark. */
     fun writePacket(
         timestampMicros: Long,
@@ -57,7 +67,11 @@ object Pcapng {
     const val BLOCK_SECTION_HEADER = 0x0A0D0D0A
     const val BLOCK_INTERFACE_DESCRIPTION = 0x00000001
     const val BLOCK_ENHANCED_PACKET = 0x00000006
+    const val BLOCK_DECRYPTION_SECRETS = 0x0000000A
     private const val BYTE_ORDER_MAGIC = 0x1A2B3C4D
+
+    /** "TLSK": the secrets are an NSS key log (see [io.github.rudolfhk.traffical.core.tls.TlsKeyLog]). */
+    const val SECRETS_TYPE_TLS_KEY_LOG = 0x544C534B
 
     private const val OPT_COMMENT = 1
     private const val SHB_USERAPPL = 4
@@ -103,6 +117,19 @@ object Pcapng {
         block.put(data, offset, captured)
         pad(block, captured)
         putOptions(block, options)
+        finish(block)
+        return block.array()
+    }
+
+    /** A Decryption Secrets Block carrying an NSS TLS key log (UTF-8/ASCII text). */
+    fun tlsKeyLog(keyLog: String): ByteArray = decryptionSecrets(SECRETS_TYPE_TLS_KEY_LOG, keyLog.toByteArray(Charsets.US_ASCII))
+
+    private fun decryptionSecrets(secretsType: Int, data: ByteArray): ByteArray {
+        val block = block(BLOCK_DECRYPTION_SECRETS, 8 + padded(data.size))
+        block.putInt(secretsType)
+        block.putInt(data.size)
+        block.put(data)
+        pad(block, data.size)
         finish(block)
         return block.array()
     }

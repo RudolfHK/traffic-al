@@ -17,7 +17,8 @@ remote VPN server, no root required. The project prompt and phase plan are in
 | 5 | Background capture, recordings on storage, settings, light/dark theme | done (needs on-device test) |
 | 6 | Encrypted recordings and connection history (Android Keystore, Tink, SQLCipher), app lock with PIN and fingerprint | done (needs on-device test) |
 | 7 | Destinations: country and network of every server (offline), known trackers with company and category, owner lookup (RDAP, reverse DNS) on request | done (needs on-device test) |
-| 8–9 | TLS decryption, validation | planned |
+| 8 | TLS decryption: embed an owner-supplied TLS key log so Wireshark decrypts the recording, decryption verified with tshark | done (needs on-device test) |
+| 9 | Validation | planned |
 
 ## How it works
 
@@ -234,7 +235,10 @@ flow. It also writes the packets as recordings and exports them:
 - encrypted with the last file cut off, as when Android kills the capture.
 
 tshark must read every export without errors, with the same packet lengths and the app
-comments, and the encrypted files must contain no plaintext. CI runs all of it.
+comments, and the encrypted files must contain no plaintext. It also captures a real TLS
+session with a key log, embeds the keys as a PCAPNG Decryption Secrets Block (phase 8,
+[docs/DECRYPTION.md](docs/DECRYPTION.md)), and checks that tshark decrypts the HTTPS from
+them. CI runs all of it.
 
 A second CI job runs the instrumented tests (`app/src/androidTest`) on an Android 10
 emulator: recordings encrypted with the Keystore-backed keys, the migration of plain
@@ -254,6 +258,9 @@ through the real VPN (`tools/emulator/bench.py`).
   lock. On a rooted phone, root can do what the app can, including using its Keystore
   keys on the device.
 - Android shows its VPN key icon whenever a VPN runs; the app does not hide it.
+- TLS is shown decrypted only for sessions you have the keys for (your own app via
+  `SSLKEYLOGFILE`, or a key log placed with root); the app never breaks TLS and pinned
+  apps stay opaque ([docs/DECRYPTION.md](docs/DECRYPTION.md)).
 - Country and network describe the server's address, not the company behind a domain;
   CDNs (Akamai, Cloudflare, Fastly) serve many companies. The country is where the
   address is registered or announced, which may differ from where the server stands.
