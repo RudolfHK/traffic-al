@@ -29,9 +29,11 @@ worse than it should, all fixed:
 | Whole app | `tools/emulator/bench.py <apk>` | Download through the real VPN vs. without, start time, CPU, memory, frame drops |
 
 CI runs all four and uploads the numbers (`performance-host`, `device-test-reports`). It
-fails if connections are reset, the app dies during the capture, or the pipeline on ART
-handles fewer than 50,000 packets/s. Throughput on shared runners varies by ±20%, so
-throughput itself isn't a CI gate.
+fails if connections are reset, a download through the VPN is incomplete, the app dies
+during the capture, the download through the capture gets less than 70% of the speed
+without it, or the pipeline on ART handles fewer than 50,000 packets/s. Throughput on
+shared runners varies by ±20%, so absolute throughput isn't a CI gate, and the share's
+gate is looser than its 80% budget.
 
 The dev machine and the CI runners are x86 servers. A phone core (the P30 Pro's
 Cortex-A76) is roughly 2–3 times slower for this work.
@@ -109,9 +111,31 @@ What changed:
 
 ## The app on the emulator (CI)
 
-Android 10, x86_64, 16 MB heap, software rendering. Run in CI after these changes:
+Android 10 (API 29), x86_64, inside a GitHub runner (nested virtualization, software
+rendering). `tools/emulator/bench.py` downloads 100 MB from a server on the runner with
+`adb shell` (outside the app, so through the VPN), with the capture off and on. Two CI
+runs after these changes:
 
-*(filled in from the first CI run)*
+| | Result | Budget |
+| --- | --- | --- |
+| Cold start to the first frame | 1.9 s | |
+| Download without capture | 115–121 Mbit/s | |
+| Download through the capture | 115–140 Mbit/s, 100–116% of without | ≥ 80% (CI fails below 70%) |
+| Same, with the app on screen (live dashboard) | 89–108 Mbit/s | |
+| App CPU during the capture download | 1.2 cores: capture thread 0.92, GC 0.16, recorder 0.09 | |
+| Memory during the capture | Java heap 77–80 MB, native 9–19 MB | bounded |
+| Janky frames with the app on screen | 2–3% | |
+| `PerformanceTest`: capture pipeline on ART | 205,000–275,000 packets/s, slowest batch 143–184 ms | ≥ 50,000 (CI gate) |
+| Heap during `PerformanceTest` (134 MB of traffic) | peak 101 MB of 536 MB | fits |
+| App process | survived every run | survives |
+
+The capture is not the bottleneck on the emulator: it reaches the speed of the direct path
+(the emulator's network is). The CPU is mostly the native engine and the kernel's network
+stack in the nested virtual machine: per byte, it costs about 16 times what the same
+engine costs on the host, while ART runs the Kotlin side only about 2.4 times slower than
+the JVM. So the emulator's CPU numbers say little about the phone; the throughput share
+and the pipeline's packet rate do. With the app on screen, the throughput drops by up to
+a quarter because the live UI's software rendering shares the emulator's cores.
 
 ## On the phone
 

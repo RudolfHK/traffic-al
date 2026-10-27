@@ -66,7 +66,7 @@ for what misses them:
 | Request | Improved | Why |
 | --- | --- | --- |
 | "check the performance" | Budgets for six areas, derived from what the phone needs: forwarding, capture processing, memory, the UI, recordings, idle cost (table below) | Without budgets, any number "looks fine". Each budget states the phone requirement and a headroom factor for the slower phone CPU. |
-| (implicit) where to measure | Three levels: the native engine on a Linux host with a real TUN device; the Kotlin pipeline on the JVM; the whole app on the Android 10 emulator in CI (real VPN, real ART, its small heap) | There is no phone in the dev container. The host and JVM numbers find bottlenecks; the emulator checks the app as built. Only the P30 Pro can show battery and real Wi-Fi/LTE speed: those become a short manual check. |
+| (implicit) where to measure | Three levels: the native engine on a Linux host with a real TUN device; the Kotlin pipeline on the JVM; the whole app on the Android 10 emulator in CI (real VPN, real ART, its heap limit) | There is no phone in the dev container. The host and JVM numbers find bottlenecks; the emulator checks the app as built. Only the P30 Pro can show battery and real Wi-Fi/LTE speed: those become a short manual check. |
 | "if it's working good" | Fix what misses a budget, with numbers before and after, in docs/PERFORMANCE.md. The emulator test stays in CI with budget assertions. | A one-off measurement goes stale with the next feature; a CI check catches regressions. |
 
 Budgets (the phone side assumes a link of up to 300 Mbit/s and a phone core about 3 times

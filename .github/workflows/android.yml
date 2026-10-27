@@ -128,7 +128,7 @@ jobs:
           # Then the whole app: downloads through the real VPN (docs/PERFORMANCE.md).
           script: |
             ./gradlew :app:connectedDebugAndroidTest
-            mkdir -p build/perf && python3 tools/emulator/bench.py app/build/outputs/apk/debug/app-debug.apk build/perf/emulator.json
+            mkdir -p build/perf && BENCH_MIN_SHARE=0.7 python3 tools/emulator/bench.py app/build/outputs/apk/debug/app-debug.apk build/perf/emulator.json
 
       - name: Upload device test reports
         if: always()
