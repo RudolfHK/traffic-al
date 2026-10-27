@@ -102,6 +102,19 @@ def cpu_seconds(process):
     return (int(fields[11]) + int(fields[12])) / 100  # USER_HZ
 
 
+def thread_cpu(process):
+    """CPU seconds per thread name of the app process."""
+    out = shell(f"for t in /proc/{process}/task/*; do cat $t/stat; echo; done")
+    totals = {}
+    for line in out.splitlines():
+        if ")" not in line:
+            continue
+        name = line[line.index("(") + 1:line.rindex(")")]
+        fields = line.rsplit(")", 1)[1].split()
+        totals[name] = totals.get(name, 0) + (int(fields[11]) + int(fields[12])) / 100
+    return totals
+
+
 def memory():
     """App memory in MB from dumpsys meminfo's App Summary."""
     out = shell(f"dumpsys meminfo {PACKAGE}")
@@ -160,9 +173,16 @@ def main():
     time.sleep(2)
     process = pid()
     cpu = cpu_seconds(process)
+    threads = thread_cpu(process)
     started = time.monotonic()
     results["download_capture_mbps"] = downloads()
-    results["download_capture_app_cpu_share"] = round((cpu_seconds(process) - cpu) / (time.monotonic() - started), 2)
+    seconds = time.monotonic() - started
+    results["download_capture_app_cpu_share"] = round((cpu_seconds(process) - cpu) / seconds, 2)
+    # Which threads used it (share of one core during the downloads), the busiest first.
+    after = thread_cpu(process)
+    shares = {name: round((after[name] - threads.get(name, 0)) / seconds, 2) for name in after}
+    results["download_capture_thread_cpu_share"] = dict(sorted(((k, v) for k, v in shares.items() if v >= 0.01),
+                                                             key=lambda item: -item[1]))
     results["memory_capture_background"] = memory()
 
     # The same with the app on screen: the dashboard and the connection list update.

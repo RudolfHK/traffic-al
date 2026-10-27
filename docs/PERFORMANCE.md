@@ -16,7 +16,8 @@ worse than it should, all fixed:
 5. Every packet took longer the more connections were open (300 open: −30%).
 6. The capture thread, which also forwards all traffic, built the UI's connection list
    on every batch and held its lock while the dashboard was computed. The packet buffer
-   ignored the heap limit: 64 MB of packets on a device that grants 16 MB.
+   ignored the heap limit (64 MB of packet data, plus ~60 bytes per packet it didn't
+   count), also on devices that grant little (the CI emulator once reported 16 MB).
 
 ## Where and how
 
@@ -24,7 +25,7 @@ worse than it should, all fixed:
 | --- | --- | --- |
 | Native engine | `sudo tools/host-test/bench.sh` | The C engine (zdtun, nDPI, batches) on a real Linux TUN device in network namespaces: throughput, round trips, CPU, idle wake-ups, many and idle connections |
 | Kotlin | `./gradlew -p core benchmark --args="<assets>"` | The capture thread's batch processing, connection list, search, dashboard, IP lookups, encrypted recording, on synthetic traffic (`SyntheticTraffic`: DNS, TLS with SNI, downloads, nDPI results) |
-| App on ART | `PerformanceTest` (instrumented) | The capture pipeline of the app on Android 10 (emulator, 16 MB heap) with the connection list on screen |
+| App on ART | `PerformanceTest` (instrumented) | The capture pipeline of the app on Android 10 (emulator) with the connection list on screen |
 | Whole app | `tools/emulator/bench.py <apk>` | Download through the real VPN vs. without, start time, CPU, memory, frame drops |
 
 CI runs all four and uploads the numbers (`performance-host`, `device-test-reports`). It
@@ -99,8 +100,8 @@ What changed:
   every 10 s copies the connections updated since the last save instead of all 10,000.
 - **The packet buffer fits the heap**: at most 64 MB or a quarter of the heap Android
   grants, counting the ~60 bytes each packet takes besides its data. Before, small packets
-  (ACKs) took twice the counted memory, and on a 16 MB heap the buffer alone would have
-  run out of memory (the emulator showed this limit with the IP database in phase 7).
+  (ACKs) took twice the counted memory, and on a small heap (the CI emulator reported a
+  16 MB limit in phase 7) the buffer alone would run out of memory.
 - Search splits the search text once instead of per connection, builds the searched
   texts only until one matches, and caches the country names (`Locale` lookups were
   most of the 30 ms).

@@ -15,7 +15,7 @@ import org.junit.runner.RunWith
 /**
  * The capture pipeline of the app on ART (see docs/PERFORMANCE.md): the work the capture
  * thread does for each batch of the native engine, while a screen shows the connection
- * list. The traffic is far more than the heap can hold (16 MB on the CI emulator).
+ * list. The traffic (134 MB) is far more than the packet buffer may keep.
  */
 @RunWith(AndroidJUnit4::class)
 class PerformanceTest {

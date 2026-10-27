@@ -115,7 +115,7 @@ object CaptureRepository {
     private val packets = ArrayDeque<CaptureRecord>()
     private var bufferedBytes = 0L
 
-    /** The packets in memory may take a quarter of the heap Android grants (16 MB on some devices). */
+    /** The packets in memory may take a quarter of the heap Android grants (little on low-memory devices). */
     private val bufferLimit = minOf(MAX_BUFFERED_BYTES, Runtime.getRuntime().maxMemory() / 4)
 
     /** Requests to rebuild the connection list; see [PUBLISH_INTERVAL_MILLIS]. */

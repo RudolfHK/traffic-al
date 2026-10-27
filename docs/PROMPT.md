@@ -76,7 +76,7 @@ slower than the CI and dev machines):
 | --- | --- |
 | Forwarding | Bulk TCP through the engine (capture and nDPI on) at least 1 Gbit/s on the host. Request/response round trips add at most 0.5 ms (median) on an idle engine and stay below 20 ms (p99) during a bulk transfer on the same engine. |
 | Capture processing | The Kotlin side (batch decoding, flow tracking, timeline) handles at least 200,000 packets/s on the JVM. The capture thread never waits for UI work: building the connection list happens elsewhere, at most twice a second. |
-| Memory | Memory use is bounded by limits, not by how long the capture runs. The in-memory packet buffer fits the heap Android grants (a share of `Runtime.maxMemory()`, at most 64 MB): a 200 MB transfer must not run out of memory on the emulator's 16 MB heap. |
+| Memory | Memory use is bounded by limits, not by how long the capture runs. The in-memory packet buffer fits the heap Android grants (a share of `Runtime.maxMemory()`, at most 64 MB), counting what each packet costs besides its data: traffic far larger than the buffer keeps the heap bounded. |
 | UI | With 2,000 connections: building the list (with destinations) at most 50 ms, filtering it by text at most 20 ms, the dashboard at most 20 ms (JVM). |
 | Recordings | Encrypted recording writes at least 100 MB/s on the JVM, so the recorder keeps up without dropping packets. |
 | Idle | With no traffic, the engine wakes up at most 5 times a second and the app does no other periodic work. |
