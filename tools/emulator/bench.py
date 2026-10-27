@@ -94,7 +94,8 @@ def wait_for(condition, seconds=20):
 
 
 def tun_up():
-    return "tun" in shell("ip -o link show")
+    # `ip link` fails for the shell user on Android 10; the interface list is readable.
+    return "tun" in adb("shell", "ls /sys/class/net", check=False)
 
 
 def main():
