@@ -73,7 +73,24 @@ def download():
 
 
 def downloads():
-    return round(statistics.median(download() for _ in range(ROUNDS)))
+    try:
+        return round(statistics.median(download() for _ in range(ROUNDS)))
+    except RuntimeError:
+        diagnose()
+        raise
+
+
+def diagnose():
+    """What the device says after a failed download: the app's log, crashes, TCP drops."""
+    print("app process:", pid() or "not running", file=sys.stderr)
+    print(adb("logcat", "-d", "-v", "time", "-t", "200", "zdtun:V", "CaptureVpnService:V", "CaptureRepository:V",
+              "trafficcapture:V", "AndroidRuntime:E", "DEBUG:V", "libc:V", "*:S", check=False), file=sys.stderr)
+    netstat = shell("cat /proc/net/netstat").splitlines()
+    for names, values in zip(netstat[::2], netstat[1::2]):
+        if names.startswith("TcpExt:"):
+            counters = dict(zip(names.split()[1:], values.split()[1:]))
+            print({k: v for k, v in counters.items() if ("Drop" in k or "Retrans" in k or "Reset" in k) and v != "0"},
+                  file=sys.stderr)
 
 
 def pid():
@@ -123,6 +140,8 @@ def main():
     adb("install", "-r", "-g", apk)
     shell(f"appops set {PACKAGE} ACTIVATE_VPN allow")
     print("nc:", shell("which nc").strip() or "missing", file=sys.stderr)
+    stdin = subprocess.run(["adb", "shell", "ls -l /proc/self/fd/0"], stdin=subprocess.PIPE, capture_output=True, text=True)
+    print("shell stdin:", stdin.stdout.strip(), file=sys.stderr)
 
     # Cold start: the activity's first frame, from a stopped process.
     shell(f"am force-stop {PACKAGE}")
