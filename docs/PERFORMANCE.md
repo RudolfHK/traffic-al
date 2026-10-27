@@ -113,24 +113,25 @@ What changed:
 
 Android 10 (API 29), x86_64, inside a GitHub runner (nested virtualization, software
 rendering). `tools/emulator/bench.py` downloads 100 MB from a server on the runner with
-`adb shell` (outside the app, so through the VPN), with the capture off and on. Two CI
+`adb shell` (outside the app, so through the VPN), with the capture off and on. Three CI
 runs after these changes:
 
 | | Result | Budget |
 | --- | --- | --- |
-| Cold start to the first frame | 1.9 s | |
-| Download without capture | 115–121 Mbit/s | |
-| Download through the capture | 115–140 Mbit/s, 100–116% of without | ≥ 80% (CI fails below 70%) |
+| Cold start to the first frame | 1.9–2.0 s | |
+| Download without capture | 115–163 Mbit/s | |
+| Download through the capture | 115–140 Mbit/s, 85–116% of without | ≥ 80% (CI fails below 70%) |
 | Same, with the app on screen (live dashboard) | 89–108 Mbit/s | |
-| App CPU during the capture download | 1.2 cores: capture thread 0.92, GC 0.16, recorder 0.09 | |
-| Memory during the capture | Java heap 77–80 MB, native 9–19 MB | bounded |
-| Janky frames with the app on screen | 2–3% | |
-| `PerformanceTest`: capture pipeline on ART | 205,000–275,000 packets/s, slowest batch 143–184 ms | ≥ 50,000 (CI gate) |
-| Heap during `PerformanceTest` (134 MB of traffic) | peak 101 MB of 536 MB | fits |
+| App CPU during the capture download | 1.2 cores: capture thread 0.92–0.96, GC 0.16–0.18, recorder 0.07–0.09 | |
+| Memory during the capture | Java heap 74–80 MB, native 9–22 MB | bounded |
+| Janky frames with the app on screen | 2–4.5% | |
+| `PerformanceTest`: capture pipeline on ART | 205,000–275,000 packets/s, slowest batch 122–184 ms | ≥ 50,000 (CI gate) |
+| Heap during `PerformanceTest` (134 MB of traffic) | peak 101–102 MB of 536 MB | fits |
 | App process | survived every run | survives |
 
-The capture is not the bottleneck on the emulator: it reaches the speed of the direct path
-(the emulator's network is). The CPU is mostly the native engine and the kernel's network
+The capture is not the bottleneck on the emulator: through it, downloads get 85–116% of the
+direct speed, and the direct speed alone varies more than that between runs (the
+emulator's network is the limit). The CPU is mostly the native engine and the kernel's network
 stack in the nested virtual machine: per byte, it costs about 16 times what the same
 engine costs on the host, while ART runs the Kotlin side only about 2.4 times slower than
 the JVM. So the emulator's CPU numbers say little about the phone; the throughput share
