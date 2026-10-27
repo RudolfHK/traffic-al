@@ -11,14 +11,12 @@ WORK=${WORK:-$(mktemp -d)}
 mkdir -p "$WORK"
 # Interpreter for the app-side client; it needs aioquic for the QUIC check.
 PYTHON=${PYTHON:-python3}
-CLI=talcli
-SRV=talsrv
+source "$HERE/netns.sh"
 
 cleanup() {
   [[ -n "${CAP_PID:-}" ]] && kill "$CAP_PID" 2>/dev/null || true
   [[ -n "${SRV_PID:-}" ]] && kill "$SRV_PID" 2>/dev/null || true
-  ip netns del "$CLI" 2>/dev/null || true
-  ip netns del "$SRV" 2>/dev/null || true
+  delete_namespaces
 }
 trap cleanup EXIT
 
@@ -28,16 +26,7 @@ cmake --build "$WORK/build" > "$WORK/build.log" || { cat "$WORK/build.log"; exit
 cp "$WORK/build/host_capture" "$WORK/host_capture"
 
 echo "== network"
-ip netns add "$CLI"
-ip netns add "$SRV"
-ip link add vcli type veth peer name vsrv
-ip link set vcli netns "$CLI"
-ip link set vsrv netns "$SRV"
-ip -n "$SRV" addr add 10.88.0.2/24 dev vsrv
-ip -n "$CLI" addr add 10.88.0.1/24 dev vcli
-for ns in "$CLI" "$SRV"; do ip -n "$ns" link set lo up; done
-ip -n "$SRV" link set vsrv up
-ip -n "$CLI" link set vcli up
+create_namespaces
 
 mkdir -p "$WORK/www"
 head -c 50M /dev/urandom > "$WORK/www/blob"
@@ -51,16 +40,8 @@ SRV_PID=$!
 
 ip netns exec "$CLI" "$WORK/host_capture" tal0 10000 10.77.0.2 10.88.0.2 "$WORK/batches.bin" > "$WORK/capture.log" 2>&1 &
 CAP_PID=$!
-for _ in $(seq 50); do grep -q ready "$WORK/capture.log" 2>/dev/null && break; sleep 0.1; done
-
-# Like Android's VpnService: the TUN gets an address and the "apps" route through it,
-# while sockets marked by protect_socket() bypass it.
-ip -n "$CLI" addr add 10.77.0.1/24 dev tal0
-ip -n "$CLI" link set tal0 mtu 10000 up
-ip -n "$CLI" rule add fwmark 0x77 lookup main pref 100
-ip -n "$CLI" rule add to 10.88.0.0/24 lookup 177 pref 200
-ip -n "$CLI" route add default dev tal0 table 177
-ip netns exec "$CLI" sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.tal0.rp_filter=0
+wait_for_engine "$WORK/capture.log"
+route_through_tun
 # The app's kernel may drop segments the engine wrote to the TUN (e.g. receive queue
 # full, TCPRcvQDrop). TCP recovers from that only if the engine retransmits, so drop a
 # share of the server-to-app HTTP packets on purpose.

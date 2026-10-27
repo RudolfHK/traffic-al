@@ -48,6 +48,13 @@ tasks.register<JavaExec>("exportCheck") {
     mainClass.set("io.github.rudolfhk.traffical.core.tools.ExportCheckKt")
 }
 
+tasks.register<JavaExec>("benchmark") {
+    description = "Measures the Kotlin capture pipeline, UI work and recording (see docs/PERFORMANCE.md)."
+    classpath = tools.runtimeClasspath
+    mainClass.set("io.github.rudolfhk.traffical.core.tools.BenchmarkKt")
+    maxHeapSize = "2g"
+}
+
 tasks.register<JavaExec>("buildEnrichment") {
     description = "Builds the app's offline IP and tracker data (see tools/enrichment/update.sh)."
     classpath = tools.runtimeClasspath

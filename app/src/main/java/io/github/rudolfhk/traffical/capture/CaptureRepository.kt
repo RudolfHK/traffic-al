@@ -1,10 +1,12 @@
 package io.github.rudolfhk.traffical.capture
 
 import android.content.Context
+import android.util.Log
 import androidx.annotation.StringRes
 import io.github.rudolfhk.traffical.core.analysis.DashboardData
 import io.github.rudolfhk.traffical.core.analysis.FlowPacket
 import io.github.rudolfhk.traffical.core.analysis.TimeRange
+import io.github.rudolfhk.traffical.core.analysis.TimelineSummary
 import io.github.rudolfhk.traffical.core.analysis.TrafficTimeline
 import io.github.rudolfhk.traffical.core.analysis.dashboard as buildDashboard
 import io.github.rudolfhk.traffical.core.analysis.packetsOf as flowPackets
@@ -31,6 +33,7 @@ import io.github.rudolfhk.traffical.settings.SettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +43,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.OutputStream
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 data class CaptureStatus(
@@ -60,11 +64,20 @@ data class CaptureStatus(
  * Capture state shared by the VPN service (writer, on the capture thread) and the UI.
  * Connections and DNS lookups are kept in memory and saved to the encrypted history
  * database every few seconds; the packets go to the recorder (encrypted recordings).
+ * The capture thread also forwards the traffic, so it never does UI work and holds
+ * [lock] only briefly: the screens' data is built on other threads.
  */
 object CaptureRepository {
+    private const val TAG = "CaptureRepository"
     private const val MAX_DNS_EVENTS = 5_000
     private const val MAX_CONNECTIONS_SHOWN = 2_000
     private const val MAX_BUFFERED_BYTES = 64L * 1024 * 1024
+
+    /** Heap a buffered packet takes besides its bytes: the record and the array header. */
+    private const val RECORD_OVERHEAD_BYTES = 64
+
+    /** The connection list is rebuilt at most this often while a screen shows it. */
+    private const val PUBLISH_INTERVAL_MILLIS = 500L
     private const val SETTINGS_DEBOUNCE_MILLIS = 800L
     private const val SAVE_INTERVAL_MILLIS = 10_000L
 
@@ -102,6 +115,18 @@ object CaptureRepository {
     private val packets = ArrayDeque<CaptureRecord>()
     private var bufferedBytes = 0L
 
+    /** The packets in memory may take a quarter of the heap Android grants (16 MB on some devices). */
+    private val bufferLimit = minOf(MAX_BUFFERED_BYTES, Runtime.getRuntime().maxMemory() / 4)
+
+    /** Requests to rebuild the connection list; see [PUBLISH_INTERVAL_MILLIS]. */
+    private val publishRequests = Channel<Unit>(Channel.CONFLATED)
+
+    /** Incremented by [clear], so a connection list built before it is not published after it. */
+    private var generation = 0
+
+    /** Packet comments by uid (see [packetComment]). */
+    private val comments = ConcurrentHashMap<Int, String>()
+
     /** Connections of earlier runs, from the history database. */
     private var storedConnections = emptyList<FlowInfo>()
     private val unsavedLookups = ArrayList<StoredLookup>()
@@ -122,18 +147,26 @@ object CaptureRepository {
             history = HistoryStore(context)
         }
         scope.launch(Dispatchers.IO) { onHistoryLoaded(history.load(MAX_CONNECTIONS_SHOWN).get()) }
+        scope.launch {
+            for (request in publishRequests) {
+                try {
+                    if (_connections.subscriptionCount.value > 0) publishConnections() else connectionsStale = true
+                } catch (e: RuntimeException) {
+                    Log.e(TAG, "building the connection list failed", e)
+                }
+                delay(PUBLISH_INTERVAL_MILLIS)
+            }
+        }
         // While the capture runs in the background nobody looks at the connection list, so
         // it is only built when a screen starts collecting it.
         scope.launch {
             _connections.subscriptionCount.collect { subscribers ->
-                if (subscribers > 0 && connectionsStale) synchronized(lock) { publishConnections() }
+                if (subscribers > 0 && connectionsStale) publishRequests.trySend(Unit)
             }
         }
         // Once the offline data is loaded, the connections get their destinations.
         scope.launch {
-            EnrichmentStore.enrichment.collect { loaded ->
-                if (loaded != null) synchronized(lock) { if (_connections.subscriptionCount.value > 0) publishConnections() else connectionsStale = true }
-            }
+            EnrichmentStore.enrichment.collect { loaded -> if (loaded != null) requestPublish() }
         }
         scope.launch {
             SettingsStore.settings.collectLatest {
@@ -181,15 +214,15 @@ object CaptureRepository {
                 records += entry
                 timeline.add(entry.timestampMicros, entry.uid, entry.direction == Direction.OUT, entry.packet.size)
                 packets.addLast(entry)
-                bufferedBytes += entry.packet.size
-                while (bufferedBytes > MAX_BUFFERED_BYTES) bufferedBytes -= packets.removeFirst().packet.size
+                bufferedBytes += entry.packet.size + RECORD_OVERHEAD_BYTES
+                while (bufferedBytes > bufferLimit) bufferedBytes -= packets.removeFirst().packet.size + RECORD_OVERHEAD_BYTES
             }
-            if (_connections.subscriptionCount.value > 0) publishConnections() else connectionsStale = true
             _packetCount.value = packets.size
             lookups.mapTo(unsavedLookups) { it.toStored() }
             val now = System.currentTimeMillis()
             if (now - savedAtMillis >= SAVE_INTERVAL_MILLIS) saveHistory(now)
         }
+        requestPublish()
         recorder.submit(records)
         if (lookups.isNotEmpty()) {
             _dnsEvents.update { current -> (lookups.asReversed() + current).take(MAX_DNS_EVENTS) }
@@ -210,16 +243,19 @@ object CaptureRepository {
     fun dashboard(range: TimeRange): DashboardData {
         val now = referenceMicros()
         val enrichment = EnrichmentStore.current
-        return synchronized(lock) {
-            buildDashboard(tracker.snapshot(MAX_CONNECTIONS_SHOWN), timeline, range, now) { enrichment?.destination(it) }
+        // Only the snapshot needs the lock; the destinations and the grouping are done without.
+        val (flows, summary) = synchronized(lock) {
+            val flows = tracker.snapshot(MAX_CONNECTIONS_SHOWN)
+            flows to TimelineSummary.of(timeline, flows, range, now)
         }
+        return buildDashboard(flows, summary, range, now) { enrichment?.destination(it) }
     }
 
     fun appInfo(uid: Int): AppInfo = apps.appInfo(uid)
 
     /** The packets of [connection] still in the capture buffer, oldest first. */
     fun packetsOf(connection: Connection): List<FlowPacket> =
-        synchronized(lock) { flowPackets(connection.flow, packets) }
+        flowPackets(connection.flow, synchronized(lock) { packets.toList() })
 
     /** Writes the packets in memory as PCAPNG with the app per packet, and closes [out]. */
     fun exportPcapng(out: OutputStream): Int {
@@ -265,6 +301,7 @@ object CaptureRepository {
             bufferedBytes = 0
             storedConnections = emptyList()
             unsavedLookups.clear()
+            generation++
             _connections.value = emptyList()
             connectionsStale = false
             _packetCount.value = 0
@@ -280,42 +317,45 @@ object CaptureRepository {
     }
 
     private fun onHistoryLoaded(loaded: History) {
-        synchronized(lock) {
-            storedConnections = loaded.connections
-            if (_connections.subscriptionCount.value > 0) publishConnections() else connectionsStale = true
-        }
+        synchronized(lock) { storedConnections = loaded.connections }
+        requestPublish()
         val events = loaded.lookups.map { it.toEvent() }
         _dnsEvents.update { current -> (current + events).distinctBy { it.id }.take(MAX_DNS_EVENTS) }
     }
 
     /** Hands the connections changed since the last save and the new lookups to the history. Must hold [lock]. */
     private fun saveHistory(nowMillis: Long) {
-        val since = savedUpToMicros - SAVE_OVERLAP_MICROS
-        history.save(tracker.snapshot().filter { it.lastSeenMicros >= since }, unsavedLookups.toList())
+        history.save(tracker.updatedSince(savedUpToMicros - SAVE_OVERLAP_MICROS), unsavedLookups.toList())
         unsavedLookups.clear()
         savedAtMillis = nowMillis
         savedUpToMicros = nowMillis * 1000
     }
 
-    /** The live connections and those of earlier runs, most recent first. Must hold [lock]. */
+    /** Rebuilds the connection list soon if a screen shows it, otherwise when one does. */
+    private fun requestPublish() {
+        if (_connections.subscriptionCount.value > 0) publishRequests.trySend(Unit) else connectionsStale = true
+    }
+
+    /** The live connections and those of earlier runs, most recent first. Not on the capture thread. */
     private fun publishConnections() {
-        val live = tracker.snapshot(MAX_CONNECTIONS_SHOWN)
-        val flows = if (storedConnections.isEmpty()) {
+        connectionsStale = false
+        val (live, stored, built) = synchronized(lock) { Triple(tracker.snapshot(MAX_CONNECTIONS_SHOWN), storedConnections, generation) }
+        val flows = if (stored.isEmpty()) {
             live
         } else {
             val liveIds = live.mapTo(HashSet()) { it.id }
-            (live + storedConnections.filter { it.id !in liveIds })
+            (live + stored.filter { it.id !in liveIds })
                 .sortedByDescending { it.lastSeenMicros }
                 .take(MAX_CONNECTIONS_SHOWN)
         }
         val enrichment = EnrichmentStore.current
-        _connections.value = flows.map { Connection(it, apps.appInfo(it.uid), enrichment?.destination(it)) }
-        connectionsStale = false
+        val connections = flows.map { Connection(it, apps.appInfo(it.uid), enrichment?.destination(it)) }
+        synchronized(lock) { if (generation == built) _connections.value = connections }
     }
 
     /** The packet comment in exported files: which app sent or received it. */
     private fun packetComment(record: CaptureRecord): String? {
-        val app = if (record.uid == CaptureBatch.UID_UNKNOWN) null else apps.appInfo(record.uid).describe()
+        val app = if (record.uid == CaptureBatch.UID_UNKNOWN) null else comments.getOrPut(record.uid) { apps.appInfo(record.uid).describe() }
         return if (record.blocked) listOfNotNull(app, "blocked").joinToString(" ") else app
     }
 

@@ -45,8 +45,13 @@
 #define TCP_RTX_MAX_BACKOFF 5
 #define TCP_RTX_DUP_ACKS 3
 #define ZDTUN_TCP_ISN 0x77EB77EB
-#define UDP_TIMEOUT_SEC 30
-#define TCP_TIMEOUT_SEC 60
+
+// Traffic AL: idle timeouts of a NAT (RFC 4787 REQ-5, RFC 5382 REQ-5). Apps keep
+// connections open without traffic for many minutes (e.g. push notifications); upstream
+// reset them after 60 s (UDP: 30 s).
+#define UDP_TIMEOUT_SEC 120
+#define TCP_TIMEOUT_SEC 7440
+#define TCP_CLOSING_TIMEOUT_SEC 240 // one side has closed
 
 #ifdef WIN32
   // 64 is the per-thread limit on Winsocks
@@ -54,9 +59,11 @@
   #define MAX_NUM_SOCKETS 55
   #define NUM_SOCKETS_AFTER_PURGE 40
 #else
-  // on linux, the maximum open files limit is 1024
-  #define MAX_NUM_SOCKETS 128
-  #define NUM_SOCKETS_AFTER_PURGE 96
+  // Traffic AL: the apps of a phone keep hundreds of connections open; upstream reset
+  // the least recently used ones above 128. Socket fds must stay below FD_SETSIZE
+  // (1024), which the rest of the process's open files share.
+  #define MAX_NUM_SOCKETS 512
+  #define NUM_SOCKETS_AFTER_PURGE 448
 #endif
 
 /* ******************************************************* */
@@ -146,6 +153,7 @@ typedef struct zdtun_conn {
       struct {
         uint8_t fin_ack_sent:1;
         uint8_t client_closed:1;
+        uint8_t fin_pending:1; // Traffic AL: the client's FIN waits for tx_queue to be sent
       };
     } tcp;
   };
@@ -179,6 +187,12 @@ typedef struct zdtun_t {
 
   zdtun_conn_t *conn_table;
   udp_mapping_t *udp_mappings;
+
+#ifndef WIN32
+  // Traffic AL: the connection of each socket, so zdtun_handle_fd() only visits the
+  // ready sockets instead of all connections
+  zdtun_conn_t *fd_conns[FD_SETSIZE];
+#endif
 } zdtun_t;
 
 /* ******************************************************* */
@@ -298,17 +312,31 @@ static void close_socket(zdtun_t *tun, socket_t sock) {
   if(sock == INVALID_SOCKET)
     return;
 
+  // Traffic AL: called before the close, as documented ("is being closed"), so the
+  // socket can still be removed from an epoll set
+  if(tun->callbacks.on_socket_close)
+    tun->callbacks.on_socket_close(tun, sock);
+
   int rv = closesocket(sock);
 
-  if(rv == SOCKET_ERROR) {
+  if(rv == SOCKET_ERROR)
     error("closesocket failed[%d]", socket_errno);
-  } else if(tun->callbacks.on_socket_close)
-    tun->callbacks.on_socket_close(tun, sock);
 
   FD_CLR(sock, &tun->all_fds);
   FD_CLR(sock, &tun->write_fds);
+#ifndef WIN32
+  tun->fd_conns[sock] = NULL; // Traffic AL
+#endif
 
   tun->stats.num_open_sockets = max(tun->stats.num_open_sockets-1, 0);
+}
+
+/* Traffic AL: [conn] now uses [sock] (see zdtun_handle_fd). */
+static inline void set_conn_socket(zdtun_t *tun, zdtun_conn_t *conn, socket_t sock) {
+  conn->sock = sock;
+#ifndef WIN32
+  tun->fd_conns[sock] = conn;
+#endif
 }
 
 /* ******************************************************* */
@@ -1385,7 +1413,7 @@ static int handle_tcp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt,
       return -1;
     }
 
-    conn->sock = tcp_sock;
+    set_conn_socket(tun, conn, tcp_sock); // Traffic AL
 
     // Disable Nagle algorithm. We will manually buffer data with MSG_MORE
     // when needed.
@@ -1489,7 +1517,8 @@ static int handle_tcp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt,
     return send_syn_ack(tun, conn);
   }
 
-  if(!is_keep_alive && (seq != (conn->tcp.client_seq + conn->tcp.tx_queue_size))) {
+  // Traffic AL: a FIN waiting for the queue to be sent takes a sequence number too
+  if(!is_keep_alive && (seq != (conn->tcp.client_seq + conn->tcp.tx_queue_size + conn->tcp.fin_pending))) {
     debug("ignoring out of sequence data: expected %d, got %d", conn->tcp.client_seq, seq);
 
     // Traffic AL: data (or a FIN) the client resends because our ACK was lost. ACK it
@@ -1524,6 +1553,18 @@ static int handle_tcp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt,
     int rv;
 
     debug("Got TCP FIN+ACK from client");
+
+    // Traffic AL: data still queued for the server, and this segment's own data, must be
+    // sent before the half close. Upstream shut the socket down first, so the queued sends
+    // failed (EPIPE), the upload was cut off and the connection reset. The FIN is
+    // acknowledged once the queue is sent (handle_queued_tcp_data).
+    if((conn->sock != INVALID_SOCKET) && ((pkt->l7_len > 0) || conn->tcp.tx_queue)) {
+      if((pkt->l7_len > 0) && (enqueue_tcp_data(tun, conn, pkt->l7, pkt->l7_len, data->th_flags) != 0))
+        return -1;
+
+      conn->tcp.fin_pending = 1;
+      return 0;
+    }
 
     if(conn->sock != INVALID_SOCKET) {
       // Half close the socket to possibly signal the remote server
@@ -1729,7 +1770,7 @@ static int handle_udp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt, zdtun_conn_t *co
       return -1;
     }
 
-    conn->sock = udp_sock;
+    set_conn_socket(tun, conn, udp_sock); // Traffic AL
 
     // Check for broadcasts/multicasts
     if(ipver == 4) {
@@ -1816,7 +1857,7 @@ static int handle_icmp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt, zdtun_conn_t *c
       return -1;
     }
 
-    conn->sock = icmp_sock;
+    set_conn_socket(tun, conn, icmp_sock); // Traffic AL
     conn->status = CONN_STATUS_CONNECTED;
     conn->tuple.src_port = data->un.echo.id;
   }
@@ -2176,6 +2217,17 @@ static int handle_queued_tcp_data(zdtun_t *tun, zdtun_conn_t *conn) {
     // ACK the sent packets
     conn->tcp.client_seq += sent;
     conn->tcp.tx_queue_size -= sent;
+
+    // Traffic AL: all data before the client's FIN is sent: half close, ACK the FIN too
+    if(!conn->tcp.tx_queue && conn->tcp.fin_pending) {
+      conn->tcp.fin_pending = 0;
+      conn->tcp.client_closed = 1;
+      conn->tcp.client_seq += 1;
+
+      if(shutdown(conn->sock, SHUT_WR) != 0)
+        debug("shutdown failed[%d] %s", errno, strerror(errno));
+    }
+
     build_reply_tcpip(tun, conn, TH_ACK, 0, 0);
 
     if(send_to_client(tun, conn, TCP_HEADER_LEN) < 0)
@@ -2189,13 +2241,24 @@ static int handle_queued_tcp_data(zdtun_t *tun, zdtun_conn_t *conn) {
 
 int zdtun_handle_fd(zdtun_t *tun, const fd_set *rd_fds, const fd_set *wr_fds) {
   int rv = 0;
-  zdtun_conn_t *conn, *tmp;
+  zdtun_conn_t *conn;
+
+#ifndef WIN32
+  // Traffic AL: visit the ready sockets only. Upstream iterated over all connections,
+  // which made every packet cost time proportional to the number of open connections.
+  for(int fd = 0; fd <= tun->stats.all_max_fd; fd++) {
+    if(!FD_ISSET(fd, rd_fds) && !FD_ISSET(fd, wr_fds))
+      continue;
+    if(!(conn = tun->fd_conns[fd]) || (conn->sock != fd))
+      continue;
+#else
+  zdtun_conn_t *tmp;
 
   HASH_ITER(hh, tun->conn_table, conn, tmp) {
-    uint8_t ipproto = conn->tuple.ipproto;
-
     if(conn->sock == INVALID_SOCKET)
       continue;
+#endif
+    uint8_t ipproto = conn->tuple.ipproto;
 
     if(FD_ISSET(conn->sock, rd_fds)) {
       if(ipproto == IPPROTO_TCP)
@@ -2242,7 +2305,18 @@ void zdtun_purge_expired(zdtun_t *tun) {
 
     switch(conn->tuple.ipproto) {
     case IPPROTO_TCP:
-      timeout = TCP_TIMEOUT_SEC;
+      // Traffic AL: shorter once a side has closed
+      timeout = (conn->tcp.client_closed || conn->tcp.fin_pending || conn->tcp.fin_ack_sent)
+        ? TCP_CLOSING_TIMEOUT_SEC : TCP_TIMEOUT_SEC;
+
+      // Traffic AL: an idle connection does not keep its retransmission buffer (up to
+      // 512 KB) for hours
+      if((conn->tcp.rtx.len == 0) && conn->tcp.rtx.buf) {
+        free(conn->tcp.rtx.buf);
+        conn->tcp.rtx.buf = NULL;
+        conn->tcp.rtx.cap = 0;
+        conn->tcp.rtx.start = 0;
+      }
       break;
     case IPPROTO_UDP:
       timeout = UDP_TIMEOUT_SEC;

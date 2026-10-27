@@ -54,8 +54,43 @@ lite), reverse DNS/RDAP on demand and bundled tracker lists (Disconnect, EasyPri
 | --- | --- | --- |
 | MaxMind GeoLite2 City + ASN | DB-IP Lite Country + ASN (CC BY 4.0) | GeoLite2 needs an account and its license limits redistribution; city-level data is 100+ MB and imprecise for servers. Country and network operator are what matter for a server. |
 | Disconnect, EasyPrivacy | AdGuard companiesdb (WhoTracks.me, CC BY-SA 4.0): domain, tracker name, company, category | Disconnect's list is CC BY-NC-SA 4.0, which a GPL-3.0 app can't include. EasyPrivacy's domain-only part has shrunk to a few lines, and its other rules match URLs, which the app can't see. companiesdb adds the company, which answers "who" rather than only "a tracker". |
-| (implicit) data format | Compact range tables (varint deltas, gzip; 4.5 MB for 1.2 M ranges) loaded lazily by the UI; a JVM tool builds them from the CSV/JSON sources; `tools/enrichment/update.sh` refreshes them | Fast offline lookups (binary search) without an MMDB library. A capture running in the background doesn't load the data. |
+| (implicit) data format | Fixed-width range tables (15 MB, IPv6 per /64), stored uncompressed in the APK and memory-mapped; a JVM tool builds them from the CSV/JSON sources; `tools/enrichment/update.sh` refreshes them | Fast offline lookups (binary search) without an MMDB library, and off the Java heap: a first version that loaded the tables onto the heap failed with an OutOfMemoryError on an emulator with a 16 MB heap limit. A capture running in the background doesn't load the data. |
 | reverse DNS / RDAP on demand | A button in the connection detail; rdap.org redirects to the right registry | It is the only traffic the app creates itself, so it only happens when the user asks. |
+
+## Performance check (improved)
+
+The request was *"Check the performance of the app if it's working good"*. "Working good"
+needs numbers to be checkable, a place to measure them without the phone, and fixes
+for what misses them:
+
+| Request | Improved | Why |
+| --- | --- | --- |
+| "check the performance" | Budgets for six areas, derived from what the phone needs: forwarding, capture processing, memory, the UI, recordings, idle cost (table below) | Without budgets, any number "looks fine". Each budget states the phone requirement and a headroom factor for the slower phone CPU. |
+| (implicit) where to measure | Three levels: the native engine on a Linux host with a real TUN device; the Kotlin pipeline on the JVM; the whole app on the Android 10 emulator in CI (real VPN, real ART, its small heap) | There is no phone in the dev container. The host and JVM numbers find bottlenecks; the emulator checks the app as built. Only the P30 Pro can show battery and real Wi-Fi/LTE speed: those become a short manual check. |
+| "if it's working good" | Fix what misses a budget, with numbers before and after, in docs/PERFORMANCE.md. The emulator test stays in CI with budget assertions. | A one-off measurement goes stale with the next feature; a CI check catches regressions. |
+
+Budgets (the phone side assumes a link of up to 300 Mbit/s and a phone core about 3 times
+slower than the CI and dev machines):
+
+| Area | Budget |
+| --- | --- |
+| Forwarding | Bulk TCP through the engine (capture and nDPI on) at least 1 Gbit/s on the host. Request/response round trips add at most 0.5 ms (median) on an idle engine and stay below 20 ms (p99) during a bulk transfer on the same engine. |
+| Capture processing | The Kotlin side (batch decoding, flow tracking, timeline) handles at least 200,000 packets/s on the JVM. The capture thread never waits for UI work: building the connection list happens elsewhere, at most twice a second. |
+| Memory | Memory use is bounded by limits, not by how long the capture runs. The in-memory packet buffer fits the heap Android grants (a share of `Runtime.maxMemory()`, at most 64 MB): a 200 MB transfer must not run out of memory on the emulator's 16 MB heap. |
+| UI | With 2,000 connections: building the list (with destinations) at most 50 ms, filtering it by text at most 20 ms, the dashboard at most 20 ms (JVM). |
+| Recordings | Encrypted recording writes at least 100 MB/s on the JVM, so the recorder keeps up without dropping packets. |
+| Idle | With no traffic, the engine wakes up at most 5 times a second and the app does no other periodic work. |
+
+Measured as:
+- `tools/host-test/bench.sh`: the engine on a real TUN device in network namespaces:
+  throughput both ways, round-trip latency idle and under load, engine CPU time,
+  wake-ups while idle, connection setup rate.
+- `./gradlew -p core benchmark`: the Kotlin pipeline, the UI work and encrypted
+  recording on the JVM with synthetic traffic.
+- An instrumented test on the emulator: a download through the real VPN (from a server on
+  the CI runner, started by `adb shell`, so it isn't excluded from the VPN like the app
+  itself), compared with the same download without the VPN, plus the capture pipeline on
+  ART with the emulator's heap limit.
 
 ## The prompt
 
@@ -96,6 +131,10 @@ no Wi-Fi monitor mode, no capturing other devices.
 - Don't copy GPL code (PCAPdroid, zdtun) unless I explicitly approve relicensing to GPL-3.0.
   Reading it for reference is fine.
 - Document every platform limitation you hit in README.md ("Limitations").
+- Keep the performance budgets of docs/PERFORMANCE.md: the capture thread forwards the
+  traffic, so it never waits for UI work; memory is bounded by limits that fit the heap
+  Android grants; per-packet work doesn't grow with the number of connections. Rerun the
+  benchmarks after changes to the capture path.
 
 # Phases (each one is done when its check passes on the device)
 1. Project setup and VPN skeleton. Done when the consent dialog appears, the VPN key icon
@@ -226,3 +265,5 @@ no Wi-Fi monitor mode, no capturing other devices.
   "Don't copy GPL code" rule in the prompt no longer applies.
 - The native engine is tested on a Linux host with a real TUN device
   (`tools/host-test/run.sh`), so most of it can be verified without a phone.
+- The performance check (after phase 7) is in docs/PERFORMANCE.md: budgets, results
+  before and after the fixes, and the checks that only the phone can do.

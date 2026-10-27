@@ -39,7 +39,8 @@ apps ──all IP traffic──▶ TUN (VPN, 10.215.173.1, DNS 10.215.173.2)
                   one record per connection: app, endpoints, protocol (e.g.
                   "TLS.YouTube"), category, server name (SNI, QUIC, HTTP Host or the
                   DNS name the app resolved), bytes and packets per direction, first/last
-                  seen; DNS lookups; 64 MB packet buffer → PCAPNG
+                  seen; DNS lookups; packet buffer (64 MB or a quarter of the
+                  app's heap) → PCAPNG
                      │                                   │
                      ▼                                   ▼
           recorder (own thread)               history (own thread)
@@ -201,7 +202,13 @@ sudo tools/host-test/run.sh          # native engine end-to-end on a Linux TUN d
 ./gradlew -p tools/ui-preview render # screenshots of the screens, no Android SDK needed
 ./gradlew :app:connectedDebugAndroidTest  # on a device or emulator: Keystore, Tink, SQLCipher
 tools/enrichment/update.sh           # newer IP and tracker data for the app
+sudo tools/host-test/bench.sh        # engine benchmark, see docs/PERFORMANCE.md
+./gradlew -p core benchmark --args="$PWD/app/src/main/assets/enrichment"  # Kotlin side
+python3 tools/emulator/bench.py app/build/outputs/apk/debug/app-debug.apk  # whole app, adb
 ```
+
+Performance budgets, how they are measured and the results are in
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 The screens in `app/src/main/java/.../ui/common` use only Compose APIs that also exist
 on Compose Desktop, and their strings come in through `UiText`. `tools/ui-preview`
@@ -210,10 +217,10 @@ to `tools/ui-preview/build/screens/*.png` (light and dark). CI uploads these as 
 `ui-screens` artifact.
 
 The host test builds the engine (with nDPI) on Linux, routes a network namespace
-through a real TUN device and checks DNS over UDP/TCP, a 50 MB download (checksum), 80
-parallel connections (half of them slow readers), TLS, a QUIC Initial, DoT blocking and
-app attribution of every captured packet, while dropping 0.5% of the packets to the
-app on purpose (`DROP_RATE`).
+through a real TUN device and checks DNS over UDP/TCP, a 50 MB download (checksum), an
+upload that ends with a half close, 80 parallel connections (half of them slow readers),
+TLS, a QUIC Initial, DoT blocking and app attribution of every captured packet, while
+dropping 0.5% of the packets to the app on purpose (`DROP_RATE`).
 
 `tools/host-test/validate.sh <work dir>` then turns the capture into a PCAPNG file and
 flow records with the Kotlin core and checks that every flow matches tshark's
@@ -230,8 +237,9 @@ comments, and the encrypted files must contain no plaintext. CI runs all of it.
 
 A second CI job runs the instrumented tests (`app/src/androidTest`) on an Android 10
 emulator: recordings encrypted with the Keystore-backed keys, the migration of plain
-recordings, the SQLCipher history (written, reopened, file not readable as SQLite) and
-the PIN.
+recordings, the SQLCipher history (written, reopened, file not readable as SQLite), the
+PIN, the bundled data and the capture pipeline's speed and memory. Then it downloads
+through the real VPN (`tools/emulator/bench.py`).
 
 ## Limitations
 
@@ -254,7 +262,9 @@ the PIN.
 Traffic AL is licensed under the [GNU General Public License v3.0](LICENSE) or later.
 It includes [zdtun](https://github.com/emanuele-f/zdtun) by Emanuele Faranda
 (LGPL-3.0), the user-space TCP/IP forwarder also used by PCAPdroid, in
-`app/src/main/cpp/zdtun`. That copy adds retransmission of data sent to the apps, see
+`app/src/main/cpp/zdtun`. That copy adds retransmission of data sent to the apps, NAT-like
+idle timeouts, more connections, a fix for uploads that end with a half close and
+per-packet costs independent of the number of connections, see
 [TRAFFIC_AL_CHANGES.md](app/src/main/cpp/zdtun/TRAFFIC_AL_CHANGES.md). Protocol detection
 uses [nDPI](https://github.com/ntop/nDPI) 5.0 by ntop (LGPL-3.0), unmodified, in
 `app/src/main/cpp/ndpi` (see [NDPI_ORIGIN.md](app/src/main/cpp/ndpi/NDPI_ORIGIN.md)).

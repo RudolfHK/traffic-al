@@ -200,6 +200,11 @@ class FlowTracker(
         // SequencedCollection.reversed(), which Android only has since API 35.
         flows.values.toList().asReversed().asSequence().take(limit).map { it.toInfo() }.toList()
 
+    /** Flows that saw a packet at or after [micros], most recently active first. */
+    fun updatedSince(micros: Long): List<FlowInfo> =
+        // Access order is packet order, so the scan stops at the first older flow.
+        flows.values.toList().asReversed().asSequence().takeWhile { it.lastSeenMicros >= micros }.map { it.toInfo() }.toList()
+
     fun clear() {
         activeFlows.clear()
         flows.clear()

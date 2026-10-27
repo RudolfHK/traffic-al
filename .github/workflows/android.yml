@@ -50,6 +50,33 @@ jobs:
       - name: Flows match tshark conversations, nDPI classification
         run: tools/host-test/validate.sh "$RUNNER_TEMP/hosttest" "$RUNNER_TEMP/flow-report"
 
+      # docs/PERFORMANCE.md: the numbers are uploaded; the checks are about correctness
+      # (connections survive), since the speed of shared runners varies.
+      - name: Engine benchmark (real TUN device)
+        run: |
+          mkdir -p build/perf
+          sudo WORK="$RUNNER_TEMP/hosttest" tools/host-test/bench.sh build/perf/engine.json
+          python3 - <<'EOF'
+          import json, sys
+          r = json.load(open("build/perf/engine.json"))
+          failures = [k for k, ok in {
+              "open connections reset": r["open_connections_alive"].split("/")[0] == r["open_connections_alive"].split("/")[1],
+              "idle connection reset": r["idle_connection_alive_after_s"] is not None,
+          }.items() if not ok]
+          print("\n".join(failures))
+          sys.exit(1 if failures else 0)
+          EOF
+
+      - name: Kotlin pipeline benchmark (JVM)
+        run: ./gradlew -p core benchmark --args="$PWD/app/src/main/assets/enrichment $PWD/build/perf/jvm.json"
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-host
+          path: build/perf/*.json
+          if-no-files-found: error
+
       - name: Build debug APK and run lint
         run: ./gradlew :app:assembleDebug :app:lintDebug
 
@@ -98,12 +125,17 @@ jobs:
           target: default
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: ./gradlew :app:connectedDebugAndroidTest
+          # Then the whole app: downloads through the real VPN (docs/PERFORMANCE.md).
+          script: |
+            ./gradlew :app:connectedDebugAndroidTest
+            mkdir -p build/perf && python3 tools/emulator/bench.py app/build/outputs/apk/debug/app-debug.apk build/perf/emulator.json
 
       - name: Upload device test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: device-test-reports
-          path: app/build/reports/androidTests/
+          path: |
+            app/build/reports/androidTests/
+            build/perf/emulator.json
           if-no-files-found: ignore

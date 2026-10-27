@@ -24,7 +24,7 @@ connection stalls forever. CI on a fast runner hit this with 16 of 80 parallel d
 - Three duplicate ACKs trigger a fast retransmission, partial ACKs during recovery
   resend the next segment (NewReno). `zdtun_tcp_retransmit_timeouts()` resends all
   unacknowledged data and the FIN after 200 ms, with exponential backoff; the capture
-  engine calls it on every loop iteration.
+  engine calls it every 50 ms.
 - The window computation no longer underflows when the app advertises less than what
   is in flight (upstream then ignored the app's window entirely). A zero window now stops
   reading from the server until the app reopens it; before, `recv()` was called with a
@@ -35,3 +35,24 @@ connection stalls forever. CI on a fast runner hit this with 16 of 80 parallel d
 
 The host test (`tools/host-test/run.sh`) drops 0.5% of the server-to-app packets on
 purpose to verify this; without the changes two drops are enough to stall a download.
+
+## Performance check (docs/PERFORMANCE.md)
+
+The engine benchmark (`tools/host-test/bench.sh`) found these, now changed:
+
+- **Idle connections were reset after 60 s** (UDP: 30 s). Apps keep connections open
+  without traffic for many minutes (push notifications, messengers), so they were cut
+  every minute and reconnected. The idle timeouts are now those a NAT must at least
+  allow: 2 h 4 min for TCP (RFC 5382), 4 min once a side has closed, 2 min for UDP
+  (RFC 4787).
+- **Only 128 sockets**: above that the least recently used connections were reset. A
+  phone's apps keep hundreds open; the limit is now 512 (socket fds must stay below
+  `FD_SETSIZE`, 1024). An idle connection releases its retransmission buffer.
+- **Uploads that end with a half close lost data**: when the app sent its FIN while
+  data was still queued for the server, the socket was shut down first, the queued sends
+  failed with `EPIPE` and the connection was reset. The FIN now waits for the queue
+  (and the FIN segment's own data, which was dropped). `run.sh` checks this.
+- **Every packet cost time per open connection**: `zdtun_handle_fd()` iterated over all
+  connections; it now looks the ready sockets up by fd. `on_socket_close` is called
+  before the socket is closed (as documented), so the engine can keep an epoll set in
+  sync with zdtun's fd sets instead of calling `select()`, which checks every socket.

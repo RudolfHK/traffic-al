@@ -3,6 +3,7 @@ package io.github.rudolfhk.traffical.core.enrichment
 import io.github.rudolfhk.traffical.core.capture.FlowInfo
 import java.net.InetAddress
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /** What is known offline about where a connection goes. */
 data class Destination(
@@ -25,8 +26,11 @@ data class Destination(
         )
 }
 
-/** "DE" -> "Germany". */
-fun countryName(code: String): String = Locale("", code).getDisplayCountry(Locale.ENGLISH).ifEmpty { code }
+private val countryNames = ConcurrentHashMap<String, String>()
+
+/** "DE" -> "Germany". Cached: searching the connection list asks for it per connection. */
+fun countryName(code: String): String =
+    countryNames.getOrPut(code) { Locale("", code).getDisplayCountry(Locale.ENGLISH).ifEmpty { code } }
 
 /** The bundled offline data; either part may be missing. */
 class Enrichment(val ips: IpDatabase?, val trackers: TrackerList?) {

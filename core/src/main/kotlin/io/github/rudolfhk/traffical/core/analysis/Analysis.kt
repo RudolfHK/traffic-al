@@ -76,6 +76,9 @@ data class ConnectionFilter(
     /** True if nothing but the time range is set. */
     val isEmpty: Boolean get() = copy(timeRange = TimeRange.ALL) == ConnectionFilter()
 
+    // Split once, not for every connection: the list is filtered while the user types.
+    private val words: List<String> by lazy { text.trim().split(WHITESPACE).filter { it.isNotEmpty() } }
+
     fun matches(
         flow: FlowInfo,
         appLabel: String,
@@ -93,13 +96,21 @@ data class ConnectionFilter(
         }
         if (attentionOnly && flow.flags(destination?.tracker).none { it in ATTENTION_FLAGS }) return false
 
-        val words = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
         if (words.isEmpty()) return true
-        val haystack = listOfNotNull(
-            appLabel, packageName, flow.domain, flow.sni, flow.serverName, flow.dnsName,
-            flow.remoteAddress.hostAddress, flow.appProtocol, flow.category, flow.remotePort.toString(),
-        ) + destination?.searchTerms.orEmpty()
+        // Built lazily, cheap terms first: most connections are rejected by the first word.
+        val haystack = sequence {
+            yield(appLabel)
+            packageName?.let { yield(it) }
+            for (name in listOf(flow.sni, flow.serverName, flow.dnsName, flow.appProtocol, flow.category)) name?.let { yield(it) }
+            yield(flow.remotePort.toString())
+            flow.remoteAddress.hostAddress?.let { yield(it) }
+            destination?.let { yieldAll(it.searchTerms) }
+        }
         return words.all { word -> haystack.any { it.contains(word, ignoreCase = true) } }
+    }
+
+    private companion object {
+        val WHITESPACE = Regex("\\s+")
     }
 }
 
@@ -154,19 +165,54 @@ fun dashboard(
     range: TimeRange,
     nowMicros: Long,
     destination: (FlowInfo) -> Destination? = { null },
+): DashboardData = dashboard(flows, TimelineSummary.of(timeline, flows, range, nowMicros), range, nowMicros, destination)
+
+/**
+ * What the dashboard needs from a [TrafficTimeline] at one moment. The timeline is not
+ * thread-safe, so the app takes this while holding the capture's lock and does the rest
+ * of the work without it.
+ */
+class TimelineSummary(
+    val totals: TrafficTotals,
+    val rate: TrafficTotals,
+    val series: List<TrafficPoint>,
+    val totalsByUid: Map<Int, TrafficTotals>,
+    val rateByUid: Map<Int, TrafficTotals>,
+) {
+    companion object {
+        fun of(timeline: TrafficTimeline, flows: List<FlowInfo>, range: TimeRange, nowMicros: Long): TimelineSummary {
+            val nowSecond = Math.floorDiv(nowMicros, 1_000_000L)
+            val totalsByUid = timeline.totalsByUid(nowSecond, range.seconds)
+            return TimelineSummary(
+                totals = timeline.totals(nowSecond, range.seconds),
+                rate = timeline.rate(nowSecond),
+                series = timeline.series(nowSecond, range.seconds ?: (nowSecond - firstSecond(flows, nowSecond) + 1)),
+                totalsByUid = totalsByUid,
+                rateByUid = (totalsByUid.keys + flows.map { it.uid }).associateWith { timeline.rate(nowSecond, it) },
+            )
+        }
+    }
+}
+
+/** Like the other [dashboard], with the timeline's part already taken. */
+fun dashboard(
+    flows: List<FlowInfo>,
+    timeline: TimelineSummary,
+    range: TimeRange,
+    nowMicros: Long,
+    destination: (FlowInfo) -> Destination? = { null },
 ): DashboardData {
-    val nowSecond = Math.floorDiv(nowMicros, 1_000_000L)
     val inRange = range.seconds?.let { seconds ->
         flows.filter { it.lastSeenMicros >= nowMicros - seconds * 1_000_000 }
     } ?: flows
-    val bytesByUid = timeline.totalsByUid(nowSecond, range.seconds)
+    val bytesByUid = timeline.totalsByUid
     val flowsByUid = inRange.groupBy { it.uid }
     val trackerOf = inRange.associate { it.id to destination(it)?.tracker }
 
     val apps = (bytesByUid.keys + flowsByUid.keys).map { uid ->
         val appFlows = flowsByUid[uid].orEmpty()
         val bytes = bytesByUid[uid] ?: TrafficTotals()
-        val rate = timeline.rate(nowSecond, uid)
+        val rate = timeline.rateByUid[uid] ?: TrafficTotals()
         AppTraffic(
             uid = uid,
             bytesOut = bytes.bytesOut,
@@ -181,9 +227,9 @@ fun dashboard(
 
     return DashboardData(
         range = range,
-        totals = timeline.totals(nowSecond, range.seconds),
-        rate = timeline.rate(nowSecond),
-        series = timeline.series(nowSecond, range.seconds ?: (nowSecond - firstSecond(flows, nowSecond) + 1)),
+        totals = timeline.totals,
+        rate = timeline.rate,
+        series = timeline.series,
         apps = apps,
         connections = inRange.size,
         attention = apps.sumOf { it.attention },

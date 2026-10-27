@@ -47,6 +47,16 @@ class TcpDns(socketserver.BaseRequestHandler):
         self.request.sendall(struct.pack("!H", len(reply)) + reply)
 
 
+class CountingSink(socketserver.BaseRequestHandler):
+    """Reads until the client closes its side, then answers with the byte count."""
+
+    def handle(self):
+        total = 0
+        while data := self.request.recv(1 << 16):
+            total += len(data)
+        self.request.sendall(str(total).encode())
+
+
 class DotListener(socketserver.BaseRequestHandler):
     def handle(self):
         with open(DOT_LOG, "a") as f:
@@ -71,6 +81,7 @@ class HttpServer(http.server.ThreadingHTTPServer):
 threading.Thread(target=udp_dns, daemon=True).start()
 threading.Thread(target=Server((ADDR, 53), TcpDns).serve_forever, daemon=True).start()
 threading.Thread(target=Server((ADDR, 853), DotListener).serve_forever, daemon=True).start()
+threading.Thread(target=Server((ADDR, 8081), CountingSink).serve_forever, daemon=True).start()
 
 os.chdir(WEBROOT)
 handler = http.server.SimpleHTTPRequestHandler

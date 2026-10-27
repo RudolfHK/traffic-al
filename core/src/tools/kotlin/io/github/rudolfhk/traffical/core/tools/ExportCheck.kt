@@ -65,7 +65,8 @@ fun main(args: Array<String>) {
 private const val SEGMENT_BYTES = 4L * 1024 * 1024
 private const val LIMIT_BYTES = 20L * 1024 * 1024
 
-private class TinkCodec(private val aead: StreamingAead) : SegmentCodec {
+/** Recording segments encrypted like in the app (also used by Benchmark). */
+internal class TinkCodec(private val aead: StreamingAead) : SegmentCodec {
     override val suffix = ".enc"
     override fun encrypting(out: OutputStream, associatedData: ByteArray): OutputStream =
         aead.newEncryptingStream(out, associatedData)
@@ -73,7 +74,7 @@ private class TinkCodec(private val aead: StreamingAead) : SegmentCodec {
         aead.newDecryptingStream(input, associatedData)
 }
 
-private fun newStreamingAead(): StreamingAead {
+internal fun newStreamingAead(): StreamingAead {
     StreamingAeadConfig.register()
     @Suppress("DEPRECATION")
     return KeysetHandle.generateNew(KeyTemplates.get("AES256_GCM_HKDF_4KB")).getPrimitive(StreamingAead::class.java)

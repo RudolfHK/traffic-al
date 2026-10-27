@@ -86,6 +86,21 @@ for name, mark in (("download_through_tun", None), ("download_direct", PROTECT_M
     except OSError as e:
         check(name, False, type(e).__name__)
 
+def upload_then_half_close(size):
+    """Sends size bytes and closes the sending side (FIN) at once; the server echoes the count.
+    The engine must deliver everything before the FIN, also data it still has queued."""
+    with socket.create_connection((SERVER, 8081), timeout=20) as s:
+        s.sendall(os.urandom(size))
+        s.shutdown(socket.SHUT_WR)
+        return int(s.recv(32).decode())
+
+
+try:
+    received = upload_then_half_close(32 * 1024 * 1024)
+    check("upload_half_close", received == 32 * 1024 * 1024, f"server received {received} bytes")
+except (OSError, ValueError) as e:
+    check("upload_half_close", False, type(e).__name__)
+
 SMALL = open(sys.argv[2], "rb").read() if len(sys.argv) > 2 else None
 
 

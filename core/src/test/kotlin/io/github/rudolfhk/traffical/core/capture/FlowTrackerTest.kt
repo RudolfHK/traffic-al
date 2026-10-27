@@ -43,6 +43,20 @@ class FlowTrackerTest {
         PacketBuilder.tcp(from, fromPort, to, toPort, 1, 1, flags, payload)
 
     @Test
+    fun `updatedSince lists the flows active since a moment, newest first`() {
+        val tracker = FlowTracker()
+        tracker.process(out(tcp(app, 50001, server, 443, TcpFlags.SYN)))
+        tracker.process(out(tcp(app, 50002, server, 443, TcpFlags.SYN)))
+        val since = clock
+        tracker.process(out(tcp(app, 50003, server, 443, TcpFlags.SYN)))
+        tracker.process(inbound(tcp(server, 443, app, 50001, TcpFlags.SYN or TcpFlags.ACK)))
+
+        assertEquals(listOf(50001, 50003), tracker.updatedSince(since).map { it.localPort })
+        assertEquals(3, tracker.updatedSince(0).size)
+        assertTrue(tracker.updatedSince(clock).isEmpty())
+    }
+
+    @Test
     fun `pairs DNS queries and responses and names later connections`() {
         val tracker = FlowTracker()
         assertNull(tracker.process(out(PacketBuilder.udp(app, 40000, virtualDns, 53, dnsQuery(7, "tracker.example")))))

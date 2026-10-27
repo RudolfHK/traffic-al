@@ -96,6 +96,13 @@ class CaptureVpnService : VpnService() {
         if (capture != null) return
         showForegroundNotification()
 
+        // Consent was given before (by the user or for always-on): makes this app the
+        // prepared VPN again, e.g. when started by the system or from the shell.
+        if (prepare(this) != null) {
+            fail(R.string.error_vpn_consent_denied)
+            return
+        }
+
         val connectivity = getSystemService(ConnectivityManager::class.java)
         val link = connectivity.getLinkProperties(connectivity.activeNetwork)
         val pfd = establish(hasGlobalIpv6(link))
