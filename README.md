@@ -18,7 +18,7 @@ remote VPN server, no root required. The project prompt and phase plan are in
 | 6 | Encrypted recordings and connection history (Android Keystore, Tink, SQLCipher), app lock with PIN and fingerprint | done (needs on-device test) |
 | 7 | Destinations: country and network of every server (offline), known trackers with company and category, owner lookup (RDAP, reverse DNS) on request | done (needs on-device test) |
 | 8 | TLS decryption: embed an owner-supplied TLS key log so Wireshark decrypts the recording, decryption verified with tshark | done (needs on-device test) |
-| 9 | Validation | planned |
+| 9 | Validation: known traffic vs tshark, IPv6 through the engine, recordings and edge cases in CI; a phone checklist for the rest ([docs/VALIDATION.md](docs/VALIDATION.md)) | done (needs on-device test) |
 
 ## How it works
 
@@ -249,7 +249,9 @@ through the real VPN (`tools/emulator/bench.py`).
 ## Limitations
 
 - Only one VPN can be active per Android profile.
-- IPv6 is routed through the capture only if the network has a global IPv6 address.
+- IPv6 is routed through the capture only if the network has a global IPv6 address; the
+  engine's IPv6 forwarding is tested on the host where the kernel supports it
+  ([docs/VALIDATION.md](docs/VALIDATION.md)).
 - nDPI classifies a connection from its first 12 packets; protocols that reveal
   themselves later stay "Unknown".
 - The overview's totals and throughput chart cover the time since the app last started;

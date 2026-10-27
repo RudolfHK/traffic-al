@@ -35,7 +35,7 @@ head -c 256K /dev/urandom > "$WORK/www/small"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=tls.example.test" \
   -keyout "$WORK/tls.pem" -out "$WORK/tls.pem.crt" 2> /dev/null
 cat "$WORK/tls.pem.crt" >> "$WORK/tls.pem"
-ip netns exec "$SRV" python3 "$HERE/servers.py" 10.88.0.2 "$WORK/www" "$WORK/dot.log" "$WORK/tls.pem" &
+ip netns exec "$SRV" python3 "$HERE/servers.py" 10.88.0.2 "$WORK/www" "$WORK/dot.log" "$WORK/tls.pem" ${HOST_IPV6:+fd00:88::2} &
 SRV_PID=$!
 
 ip netns exec "$CLI" "$WORK/host_capture" tal0 10000 10.77.0.2 10.88.0.2 "$WORK/batches.bin" > "$WORK/capture.log" 2>&1 &
@@ -55,7 +55,7 @@ EXPECTED=$(printf '{"blob": "%s", "small": "%s"}' \
   "$(sha256sum "$WORK/www/blob" | cut -d' ' -f1)" "$(sha256sum "$WORK/www/small" | cut -d' ' -f1)")
 status=0
 : > "$WORK/keylog.txt" # the TLS leg writes its session keys here (SSLKEYLOGFILE format)
-FAILED_PORTS_FILE="$WORK/failed_ports" TLS_KEYLOG="$WORK/keylog.txt" ip netns exec "$CLI" \
+FAILED_PORTS_FILE="$WORK/failed_ports" TLS_KEYLOG="$WORK/keylog.txt" SERVER6="${HOST_IPV6:+fd00:88::2}" ip netns exec "$CLI" \
   "$PYTHON" "$HERE/client.py" "$EXPECTED" "$WORK/www/small" || status=$?
 
 echo "== kernel counters"

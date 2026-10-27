@@ -12,20 +12,23 @@ ADDR = sys.argv[1]
 WEBROOT = sys.argv[2]
 DOT_LOG = sys.argv[3]
 TLS_CERT = sys.argv[4]  # PEM with certificate and key
+ADDR6 = sys.argv[5] if len(sys.argv) > 5 else None
 
 
 def dns_answer(query: bytes) -> bytes:
-    # Echo the question and answer every A query with ADDR.
+    # Echo the question and answer A with ADDR and AAAA with ADDR6.
     qid, flags, qdcount = struct.unpack("!HHH", query[:6])
     pos = 12
     while query[pos] != 0:
         pos += query[pos] + 1
     question = query[12:pos + 5]
     qtype = struct.unpack("!H", query[pos + 1:pos + 3])[0]
-    header = struct.pack("!HHHHHH", qid, 0x8180, 1, 1 if qtype == 1 else 0, 0, 0)
     answer = b""
     if qtype == 1:
         answer = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, 4) + socket.inet_aton(ADDR)
+    elif qtype == 28 and ADDR6:
+        answer = b"\xc0\x0c" + struct.pack("!HHIH", 28, 1, 60, 16) + socket.inet_pton(socket.AF_INET6, ADDR6)
+    header = struct.pack("!HHHHHH", qid, 0x8180, 1, 1 if answer else 0, 0, 0)
     return header + question + answer
 
 
@@ -88,6 +91,11 @@ class HttpServer(http.server.ThreadingHTTPServer):
     request_queue_size = BACKLOG
 
 
+class HttpServer6(http.server.ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+    request_queue_size = BACKLOG
+
+
 threading.Thread(target=udp_dns, daemon=True).start()
 threading.Thread(target=Server((ADDR, 53), TcpDns).serve_forever, daemon=True).start()
 threading.Thread(target=Server((ADDR, 853), DotListener).serve_forever, daemon=True).start()
@@ -104,5 +112,9 @@ tls.load_cert_chain(TLS_CERT)
 https = HttpServer((ADDR, 8443), handler)
 https.socket = tls.wrap_socket(https.socket, server_side=True)
 threading.Thread(target=https.serve_forever, daemon=True).start()
+
+# Plain HTTP over IPv6 as well, to test the engine's IPv6 forwarding (same web root).
+if ADDR6:
+    threading.Thread(target=HttpServer6((ADDR6, 8080), handler).serve_forever, daemon=True).start()
 
 HttpServer((ADDR, 8080), handler).serve_forever()

@@ -3,11 +3,20 @@ conversations on the exported PCAPNG, and nDPI must have classified the test tra
 
 Usage: validate_flows.py <capture.pcapng> <flows.json>
 """
+import ipaddress
 import json
 import re
 import subprocess
 import sys
 from collections import defaultdict
+
+
+def norm(addr):
+    """Canonical address, so tshark's compressed IPv6 matches Java's expanded form."""
+    try:
+        return ipaddress.ip_address(addr).compressed
+    except ValueError:
+        return addr
 
 pcap, flows_file = sys.argv[1:3]
 flows = json.load(open(flows_file))
@@ -32,7 +41,7 @@ for line in tshark.splitlines():
     elif line.startswith("UDP Conversations"):
         proto = 17
     elif (m := CONV.match(line)) and proto:
-        a, pa, b, pb = m.group(1), int(m.group(2)), m.group(3), int(m.group(4))
+        a, pa, b, pb = norm(m.group(1)), int(m.group(2)), norm(m.group(3)), int(m.group(4))
         # "<-" is B to A, "->" is A to B
         to_a = (int(m.group(5)), int(m.group(6).replace(",", "")), m.group(7))
         to_b = (int(m.group(8)), int(m.group(9).replace(",", "")), m.group(10))
@@ -43,7 +52,7 @@ ours = defaultdict(lambda: [0, 0, 0, 0])
 for f in flows:
     if f["protocol"] not in (6, 17):
         continue
-    key = (f["protocol"], f["local"], f["localPort"], f["remote"], f["remotePort"])
+    key = (f["protocol"], norm(f["local"]), f["localPort"], norm(f["remote"]), f["remotePort"])
     totals = ours[key]
     totals[0] += f["packetsOut"]
     totals[1] += f["bytesOut"]

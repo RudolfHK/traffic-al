@@ -1,6 +1,7 @@
 """App-side checks for the host test; runs in the namespace whose traffic is captured."""
 import concurrent.futures
 import hashlib
+import ipaddress
 import json
 import os
 import socket
@@ -11,6 +12,7 @@ import time
 
 VIRTUAL_DNS = "10.77.0.2"
 SERVER = "10.88.0.2"
+SERVER6 = os.environ.get("SERVER6")  # the test server's IPv6 address, if IPv6 is set up
 PROTECT_MARK = 0x77
 EXPECTED = json.loads(sys.argv[1])  # {"blob": sha256, "small": sha256}
 RCVBUF = int(os.environ.get("SLOW_READER_RCVBUF", "0"))
@@ -25,9 +27,9 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
-def dns_query(name, tcp=False):
+def dns_query(name, tcp=False, qtype=1):
     qname = b"".join(bytes([len(p)]) + p.encode() for p in name.split(".")) + b"\x00"
-    query = struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0) + qname + struct.pack("!HH", 1, 1)
+    query = struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0) + qname + struct.pack("!HH", qtype, 1)
     if tcp:
         with socket.create_connection((VIRTUAL_DNS, 53), timeout=3) as s:
             s.sendall(struct.pack("!H", len(query)) + query)
@@ -40,6 +42,8 @@ def dns_query(name, tcp=False):
             s.settimeout(3)
             s.sendto(query, (VIRTUAL_DNS, 53))
             reply = s.recv(4096)
+    if qtype == 28:
+        return socket.inet_ntop(socket.AF_INET6, reply[-16:])
     return socket.inet_ntoa(reply[-4:])
 
 
@@ -78,6 +82,33 @@ def timed_download(mark=None):
 
 check("dns_udp", dns_query("tracker.example.test") == SERVER)
 check("dns_tcp", dns_query("cdn.example.test", tcp=True) == SERVER)
+
+
+def http_get6(path):
+    """Downloads over IPv6, to exercise the engine's IPv6 forwarding path."""
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+        s.settimeout(20)
+        s.connect((SERVER6, 8080))
+        s.sendall(f"GET /{path} HTTP/1.0\r\nHost: [{SERVER6}]\r\n\r\n".encode())
+        chunks = []
+        while chunk := s.recv(1 << 16):
+            chunks.append(chunk)
+    data = b"".join(chunks)
+    return data[data.index(b"\r\n\r\n") + 4:]
+
+
+if SERVER6:
+    # AAAA resolves through the virtual DNS, and a download goes over IPv6 end to end.
+    try:
+        aaaa = dns_query("ipv6.example.test", qtype=28)
+        check("dns_aaaa", ipaddress.ip_address(aaaa) == ipaddress.ip_address(SERVER6), aaaa)
+    except OSError as e:
+        check("dns_aaaa", False, type(e).__name__)
+    try:
+        body = http_get6("blob")
+        check("download_ipv6", hashlib.sha256(body).hexdigest() == EXPECTED["blob"], f"{len(body)} bytes")
+    except OSError as e:
+        check("download_ipv6", False, type(e).__name__)
 
 for name, mark in (("download_through_tun", None), ("download_direct", PROTECT_MARK)):
     try:

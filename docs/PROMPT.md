@@ -118,6 +118,23 @@ Built and tested (`tools/host-test`, `core`): a real TLS 1.3 session is captured
 the app's own code, and `tshark` decrypts the HTTPS from the embedded keys alone. See
 [DECRYPTION.md](DECRYPTION.md). Pinned apps stay opaque, by design.
 
+## Phase 9 (improved)
+
+The request was *"Continue with phase 9"*, whose plan named validation: known-traffic
+tests, IPv6, VPN conflict, strict Private DNS, Huawei battery, a 1 GB download.
+
+The decision: automate everything a host or emulator can show and reduce the rest to a
+short, explicit phone checklist — the same split the performance check used.
+
+| Plan item | Improved | Why |
+| --- | --- | --- |
+| Known-traffic tests | Already automated: every host-test flow is matched against `tshark` conversations and nDPI's classification | The phase-3 check already does this; phase 9 names the phone pass that confirms it on real apps. |
+| IPv6 | A real IPv6 leg in the host test (AAAA lookup + download over IPv6 through the engine), **best effort** | The engine's IPv6 forwarding had never run on the host, only the parser had unit tests. Best effort because some kernels (including this dev container) have no IPv6; there it is skipped, not failed. |
+| 1 GB download under capture | Automated as a hash-verified bulk download with induced packet loss (50 MB in CI); the 1 GB run is a phone check | CI can prove byte-exactness and retransmission cheaply; a full 1 GB belongs on the phone's real link. |
+| VPN conflict, strict Private DNS, Huawei battery | A phone checklist in [VALIDATION.md](VALIDATION.md); the app behaviours they test (clean stop on revoke, DoT blocking, the EMUI hint) already exist | Only a real device with another VPN, a strict DNS provider or EMUI can show these. |
+
+[VALIDATION.md](VALIDATION.md) has the full matrix: what CI checks and the phone checklist.
+
 ## The prompt
 
 ```markdown
@@ -276,11 +293,13 @@ no Wi-Fi monitor mode, no capturing other devices.
 ## Recommended usage
 
 - Start each Claude Code session with the prompt above plus "Implement phase N".
-- Phases 1 to 8 are implemented in this repository (phase 3 with nDPI 5.0 for
+- All phases (1 to 9) are implemented in this repository (phase 3 with nDPI 5.0 for
   protocol/service detection and QUIC/HTTP server names; flows and recordings are checked
   against tshark in CI, the encrypted storage and the bundled data on an Android 10
   emulator; phase 8 as the decryption-secrets pipeline above, decryption verified with
-  tshark in CI). Continue with **9** (validation).
+  tshark in CI; phase 9 as the validation in docs/VALIDATION.md). What remains is the
+  on-device pass: every phase is marked "needs on-device test", and the phone checklists in
+  docs/VALIDATION.md and docs/PERFORMANCE.md are the way to clear it.
 - Decision taken for 8: Traffic AL embeds an owner-supplied TLS key log so Wireshark
   decrypts the recording, and does not build a TLS-terminating proxy or generate a CA
   (docs/DECRYPTION.md). The "phases 6–10" in the table above is the original numbering; the

@@ -1,5 +1,6 @@
 """Decodes the engine's packet batches and checks what was captured."""
 import json
+import socket
 import struct
 import sys
 from collections import Counter
@@ -32,19 +33,25 @@ def flow_info(info):
     return f"{proto:>2} {src}:{sport} -> {dst}:{dport} {strings[0]} [{strings[1]}] {strings[2]!r}"
 
 
-def ipv4(pkt):
-    proto = pkt[9]
-    ihl = (pkt[0] & 0x0F) * 4
-    src, dst = ".".join(map(str, pkt[12:16])), ".".join(map(str, pkt[16:20]))
+def parse_ip(pkt):
+    """proto, src, sport, dst, dport for IPv4 and (ext-header-free) IPv6 packets."""
+    if pkt[0] >> 4 == 6:
+        proto, l4 = pkt[6], 40
+        src = socket.inet_ntop(socket.AF_INET6, pkt[8:24])
+        dst = socket.inet_ntop(socket.AF_INET6, pkt[24:40])
+    else:
+        proto, l4 = pkt[9], (pkt[0] & 0x0F) * 4
+        src, dst = ".".join(map(str, pkt[12:16])), ".".join(map(str, pkt[16:20]))
     sport = dport = 0
     if proto in (6, 17):
-        sport, dport = struct.unpack("!HH", pkt[ihl:ihl + 4])
+        sport, dport = struct.unpack("!HH", pkt[l4:l4 + 4])
     return proto, src, sport, dst, dport
 
 
 stats = Counter()
 for ts, uid, direction, flags, pkt in records:
-    proto, src, sport, dst, dport = ipv4(pkt)
+    proto, src, sport, dst, dport = parse_ip(pkt)
+    stats["ipv6_packets" if pkt[0] >> 4 == 6 else "ipv4_packets"] += 1
     stats["packets"] += 1
     stats["bytes_out" if direction == 1 else "bytes_in"] += len(pkt)
     if uid == 4242:
@@ -79,7 +86,9 @@ for port in sorted(failed_ports):
     print(f"--- failed connection, app port {port}")
     isn = ack_base = None
     for ts, uid, direction, flags, pkt in records:
-        proto, src, sport, dst, dport = ipv4(pkt)
+        if pkt[0] >> 4 != 4:
+            continue # the timeline below reads the IPv4 header; failed ports are IPv4
+        proto, src, sport, dst, dport = parse_ip(pkt)
         if proto != 6 or port not in (sport, dport):
             continue
         ihl = (pkt[0] & 0x0F) * 4
@@ -97,5 +106,5 @@ for port in sorted(failed_ports):
             print(f"{ts % 10**8:>10} app->engine ack={rel_ack:>7} win={win:>5} len={payload:>4} {names}")
 
 if len(sys.argv) > 3:
-    from scapy.all import IP, wrpcap
-    wrpcap(sys.argv[3], [IP(r[4]) for r in records])
+    from scapy.all import IP, IPv6, wrpcap
+    wrpcap(sys.argv[3], [(IPv6 if r[4][0] >> 4 == 6 else IP)(r[4]) for r in records])
