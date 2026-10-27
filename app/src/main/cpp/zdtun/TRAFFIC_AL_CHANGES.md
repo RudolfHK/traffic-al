@@ -52,6 +52,11 @@ The engine benchmark (`tools/host-test/bench.sh`) found these, now changed:
   data was still queued for the server, the socket was shut down first, the queued sends
   failed with `EPIPE` and the connection was reset. The FIN now waits for the queue
   (and the FIN segment's own data, which was dropped). `run.sh` checks this.
+- **A connection closed by both sides was dropped at once**, with its retransmission
+  buffer, although the app may not have acknowledged the last 256 KB yet. Now it is
+  closed when the app has acknowledged everything, including the FIN (found while
+  reviewing the half-close path; rare, as a segment to the app must be lost at the very
+  end).
 - **Every packet cost time per open connection**: `zdtun_handle_fd()` iterated over all
   connections; it now looks the ready sockets up by fd. `on_socket_close` is called
   before the socket is closed (as documented), so the engine can keep an epoll set in

@@ -95,6 +95,25 @@ def upload_then_half_close(size):
         return int(s.recv(32).decode())
 
 
+def download_after_half_close():
+    """Requests the blob and closes the sending side at once, like `nc`: the engine must
+    keep the connection, and retransmit to the app, until the app has everything."""
+    with socket.create_connection((SERVER, 8080), timeout=20) as s:
+        s.sendall(f"GET /blob HTTP/1.0\r\nHost: {SERVER}\r\n\r\n".encode())
+        s.shutdown(socket.SHUT_WR)
+        chunks = []
+        while chunk := s.recv(1 << 16):
+            chunks.append(chunk)
+    data = b"".join(chunks)
+    return data[data.index(b"\r\n\r\n") + 4:]
+
+
+try:
+    body = download_after_half_close()
+    check("download_after_half_close", hashlib.sha256(body).hexdigest() == EXPECTED["blob"], f"{len(body)} bytes")
+except (OSError, ValueError) as e:
+    check("download_after_half_close", False, type(e).__name__)
+
 try:
     received = upload_then_half_close(32 * 1024 * 1024)
     check("upload_half_close", received == 32 * 1024 * 1024, f"server received {received} bytes")

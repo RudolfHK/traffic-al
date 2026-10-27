@@ -2,20 +2,18 @@
 
   python3 tools/emulator/bench.py <app.apk> [result.json]
 
-Serves a file from this machine and downloads it with `nc` in `adb shell`, without and
-with the capture running. Shell traffic goes through the VPN (the app's own traffic is
+A server on this machine sends data to `nc` in `adb shell`, without and with the
+capture running. Shell traffic goes through the VPN (the app's own traffic is
 excluded from it). Also measures the app's start time, CPU time, memory and frame
 drops, and fails if the capture breaks the download or the app dies.
 """
-import functools
-import http.server
 import json
 import os
 import re
+import socket
 import statistics
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 
@@ -37,29 +35,40 @@ def shell(command):
     return adb("shell", command)
 
 
-def serve(directory):
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=directory)
-    handler.log_message = lambda *args: None
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+def serve():
+    """Sends SIZE_MB to every connection, without waiting for a request, then closes."""
+    listener = socket.create_server(("0.0.0.0", PORT))
+    block = os.urandom(1 << 20)
 
+    def send(conn):
+        with conn:
+            left = SIZE_MB * 1024 * 1024
+            while left > 0:
+                left -= conn.send(memoryview(block)[:min(left, len(block))])
 
-SHORT = []  # bytes missing at the end of downloads
+    def accept():
+        while True:
+            threading.Thread(target=send, args=(listener.accept()[0],), daemon=True).start()
+
+    threading.Thread(target=accept, daemon=True).start()
 
 
 def download():
-    """Mbit/s of one download in adb shell; the time includes adb's own overhead."""
+    """Mbit/s of one download in adb shell; the time includes adb's own overhead.
+
+    nc's input stays open: when nc closes its sending side (on the end of its input), the
+    emulator's user-mode network loses data that the server sends afterwards.
+    """
     start = time.monotonic()
-    out = shell(f"printf 'GET /blob HTTP/1.0\\r\\n\\r\\n' | nc {HOST} {PORT} | wc -c")
+    nc = subprocess.Popen(["adb", "shell", f"nc {HOST} {PORT} | wc -c"],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    out = nc.stdout.read()
+    nc.wait()
+    nc.stdin.close()
     elapsed = time.monotonic() - start
-    missing = max(0, SIZE_MB * 1024 * 1024 - int(out.strip() or 0))
-    # nc closes its sending side after the request, and the emulator's user-mode network
-    # sometimes drops the last kilobyte of such a download, also without the VPN. The
-    # host test checks complete downloads (checksums); this one measures speed.
-    if missing > 64 * 1024:
-        raise RuntimeError(f"download incomplete: {missing} bytes missing")
-    if missing:
-        SHORT.append(missing)
+    received = int(out.strip() or 0)
+    if received != SIZE_MB * 1024 * 1024:
+        raise RuntimeError(f"download incomplete: {received} bytes")
     return SIZE_MB * 8 * 1.048576 / elapsed
 
 
@@ -109,51 +118,47 @@ def tun_up():
 def main():
     apk = sys.argv[1]
     results = {}
-    with tempfile.TemporaryDirectory() as www:
-        with open(os.path.join(www, "blob"), "wb") as f:
-            f.write(os.urandom(SIZE_MB * 1024 * 1024))
-        serve(www)
+    serve()
 
-        adb("install", "-r", "-g", apk)
-        shell(f"appops set {PACKAGE} ACTIVATE_VPN allow")
-        print("nc:", shell("which nc").strip() or "missing", file=sys.stderr)
+    adb("install", "-r", "-g", apk)
+    shell(f"appops set {PACKAGE} ACTIVATE_VPN allow")
+    print("nc:", shell("which nc").strip() or "missing", file=sys.stderr)
 
-        # Cold start: the activity's first frame, from a stopped process.
-        shell(f"am force-stop {PACKAGE}")
-        start = shell(f"am start -W -n {ACTIVITY}")
-        match = re.search(r"TotalTime: (\d+)", start)
-        results["cold_start_ms"] = int(match.group(1)) if match else None
-        time.sleep(2)
-        shell(f"am force-stop {PACKAGE}")
+    # Cold start: the activity's first frame, from a stopped process.
+    shell(f"am force-stop {PACKAGE}")
+    start = shell(f"am start -W -n {ACTIVITY}")
+    match = re.search(r"TotalTime: (\d+)", start)
+    results["cold_start_ms"] = int(match.group(1)) if match else None
+    time.sleep(2)
+    shell(f"am force-stop {PACKAGE}")
 
-        results["download_direct_mbps"] = downloads()
+    results["download_direct_mbps"] = downloads()
 
-        # The VPN service only accepts the system as caller: start it as root (emulator su).
-        shell(f"su 0 am start-foreground-service -n {SERVICE} -a {PACKAGE}.START")
-        if not wait_for(tun_up):
-            raise RuntimeError("the VPN did not start")
-        time.sleep(2)
-        process = pid()
-        cpu = cpu_seconds(process)
-        started = time.monotonic()
-        results["download_capture_mbps"] = downloads()
-        results["download_capture_app_cpu_share"] = round((cpu_seconds(process) - cpu) / (time.monotonic() - started), 2)
-        results["memory_capture_background"] = memory()
+    # The VPN service only accepts the system as caller: start it as root (emulator su).
+    shell(f"su 0 am start-foreground-service -n {SERVICE} -a {PACKAGE}.START")
+    if not wait_for(tun_up):
+        raise RuntimeError("the VPN did not start")
+    time.sleep(2)
+    process = pid()
+    cpu = cpu_seconds(process)
+    started = time.monotonic()
+    results["download_capture_mbps"] = downloads()
+    results["download_capture_app_cpu_share"] = round((cpu_seconds(process) - cpu) / (time.monotonic() - started), 2)
+    results["memory_capture_background"] = memory()
 
-        # The same with the app on screen: the dashboard and the connection list update.
-        shell(f"am start -n {ACTIVITY}")
-        time.sleep(3)
-        shell(f"dumpsys gfxinfo {PACKAGE} reset")
-        results["download_capture_app_open_mbps"] = downloads()
-        results["janky_frames_app_open"] = janky_frames()
-        results["memory_capture_app_open"] = memory()
+    # The same with the app on screen: the dashboard and the connection list update.
+    shell(f"am start -n {ACTIVITY}")
+    time.sleep(3)
+    shell(f"dumpsys gfxinfo {PACKAGE} reset")
+    results["download_capture_app_open_mbps"] = downloads()
+    results["janky_frames_app_open"] = janky_frames()
+    results["memory_capture_app_open"] = memory()
 
-        results["app_process_survived"] = pid() == process
-        results["downloads_short_bytes"] = SHORT
-        results["download_capture_share"] = round(results["download_capture_mbps"] / results["download_direct_mbps"], 2)
+    results["app_process_survived"] = pid() == process
+    results["download_capture_share"] = round(results["download_capture_mbps"] / results["download_direct_mbps"], 2)
 
-        shell(f"su 0 am startservice -n {SERVICE} -a {PACKAGE}.STOP")
-        wait_for(lambda: not tun_up(), 10)
+    shell(f"su 0 am startservice -n {SERVICE} -a {PACKAGE}.STOP")
+    wait_for(lambda: not tun_up(), 10)
 
     # The pipeline measurement of PerformanceTest, if it ran on this device before.
     log = adb("logcat", "-d", "-s", "TrafficAlPerf:I", check=False)

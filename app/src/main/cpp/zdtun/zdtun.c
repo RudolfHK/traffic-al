@@ -957,6 +957,12 @@ static int tcp_client_ack(zdtun_t *tun, zdtun_conn_t *conn, u_int32_t ack,
   rtx->backoff = 0;
   rtx->last_progress_ms = zdtun_now_ms();
 
+  // Both sides have closed and the client has everything, including the FIN
+  if((tcp_outstanding(conn) == 0) && (conn->sock == INVALID_SOCKET) && conn->tcp.client_closed) {
+    zdtun_conn_close(tun, conn, CONN_STATUS_CLOSED);
+    return 0;
+  }
+
   if(rtx->in_recovery) {
     if((int32_t)(ack - rtx->recover) >= 0)
       rtx->in_recovery = 0;
@@ -1543,6 +1549,8 @@ static int handle_tcp_fwd(zdtun_t *tun, const zdtun_pkt_t *pkt,
   if(!(data->th_flags & TH_RST) && (data->th_flags & TH_ACK) && (tcp_client_ack(tun, conn,
       ntohl(data->th_ack), ntohs(data->th_win), pkt->l7_len, data->th_flags) != 0))
     return -1;
+  if(conn->status >= CONN_STATUS_CLOSED)
+    return 0; // the ACK completed the close
 
   if(data->th_flags & TH_RST) {
     debug("Got TCP reset from client");
@@ -2038,8 +2046,10 @@ static int handle_tcp_reply(zdtun_t *tun, zdtun_conn_t *conn) {
     close_socket(tun, conn->sock);
     conn->sock = INVALID_SOCKET;
 
-    if(conn->tcp.client_closed)
-      // Both the client and the server have closed, terminate the connection
+    // Both the client and the server have closed, terminate the connection. Traffic AL:
+    // once the client has acknowledged everything (tcp_client_ack), since it may still
+    // need retransmissions; upstream dropped up to 256 KB of data in flight here.
+    if(conn->tcp.client_closed && (tcp_outstanding(conn) == 0))
       zdtun_conn_close(tun, conn, CONN_STATUS_CLOSED);
 
     return 0;

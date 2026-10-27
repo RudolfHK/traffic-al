@@ -59,7 +59,9 @@ What changed (details in
 - Idle timeouts as a NAT must at least allow: TCP 2 h 4 min (RFC 5382), 4 min after a
   close, UDP 2 min (RFC 4787). Before: TCP 60 s, UDP 30 s.
 - Up to 512 sockets instead of 128. An idle connection frees its retransmission buffer.
-- The app's FIN waits until the data queued for the server is sent.
+- The app's FIN waits until the data queued for the server is sent. A connection both
+  sides have closed is kept until the app has acknowledged everything, so lost segments
+  can still be resent (before, up to 256 KB in flight were dropped with it).
 - The engine waits with `epoll` instead of `select()`, and zdtun finds the ready sockets
   by fd instead of visiting every connection. The retransmission timers are checked every
   50 ms instead of after every packet. Before, `select()` alone made 300 open connections
