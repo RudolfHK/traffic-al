@@ -29,11 +29,19 @@ automatically — no Wireshark settings needed.
 The settings screen shows how many TLS sessions the placed key log covers.
 
 **In the app, too.** Once the key log is in place, the connection detail (live and in a
-recording) shows a **Decrypted (TLS)** section for TLS 1.3 connections it has keys for: the
-request and the response in the clear, right next to the Decoded/Hex packet views. This
-needs no export and no Wireshark. Only TLS 1.3 with an AES-GCM or ChaCha20-Poly1305 cipher
-is decrypted in the app; TLS 1.2 and QUIC still need Wireshark with the exported key log,
-and pinned apps stay opaque.
+recording) shows a **Decrypted** section for connections it has keys for: the request and
+the response in the clear, right next to the Decoded/Hex packet views. This needs no export
+and no Wireshark. It covers:
+
+- **TLS 1.2 and 1.3** over TCP, with an AES-GCM or ChaCha20-Poly1305 cipher.
+- **QUIC** over UDP (the HTTP/3 application streams), as long as the connection's handshake
+  packets are still in the buffer. The decrypted QUIC stream is shown as its bytes: HTTP/3
+  DATA (the body) is readable, but HTTP/3 request/response headers are QPACK-compressed and
+  are not yet decoded in the app — for those, open the recording in Wireshark with the
+  exported key log.
+
+Legacy TLS 1.2 CBC ciphers and QPACK header decoding are not handled, and pinned apps stay
+opaque.
 
 ## Getting the keys
 

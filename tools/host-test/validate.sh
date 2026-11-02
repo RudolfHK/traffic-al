@@ -36,4 +36,13 @@ if [[ -s "$WORK/keylog.txt" ]]; then
       echo "FAIL: in-app TLS decryption did not recover the request to $host"; grep -a "connection from port" "$OUT/tls-decrypt.txt"; exit 1
     fi
   done
+
+  # phase 11: the in-app QUIC decryptor recovers the HTTP/3 response from the same key log.
+  "$HERE/../../gradlew" -q -p "$HERE/../../core" quicDecrypt \
+    --args="$WORK/batches.bin $WORK/keylog.txt 4433" > "$OUT/quic-decrypt.txt" 2>/dev/null || true
+  if grep -aq "quic ok /small" "$OUT/quic-decrypt.txt"; then
+    echo "OK: in-app QUIC decryption recovered the HTTP/3 response"
+  else
+    echo "FAIL: in-app QUIC decryption did not recover the response"; grep -a "QUIC connection" "$OUT/quic-decrypt.txt" | head; exit 1
+  fi
 fi

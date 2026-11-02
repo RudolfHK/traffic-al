@@ -264,22 +264,19 @@ try:
 except OSError as e:
     check("tls12_download", False, type(e).__name__)
 
-# QUIC: the client Initial carries the SNI; no QUIC server is needed for detection.
-try:
-    from aioquic.quic.configuration import QuicConfiguration
-    from aioquic.quic.connection import QuicConnection
+# QUIC: a real HTTP/3 GET against the aioquic server, writing the session keys to the key
+# log so the capture's QUIC can be decrypted (phase 11). The ClientHello carries the SNI.
+import subprocess
 
-    quic = QuicConnection(configuration=QuicConfiguration(
-        is_client=True, alpn_protocols=["h3"], server_name="quic.example.test"))
-    quic.connect((SERVER, 4433), now=time.time())
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        sent = 0
-        for datagram, address in quic.datagrams_to_send(now=time.time()):
-            s.sendto(datagram, address)
-            sent += 1
-    check("quic_initial", sent > 0, f"{sent} datagrams")
-except ImportError:
-    check("quic_initial", False, "aioquic is not installed (pip install aioquic)")
+try:
+    out = subprocess.run(
+        [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "quic_client.py"),
+         SERVER, os.environ.get("TLS_KEYLOG", "/dev/null")],
+        capture_output=True, text=True, timeout=30,
+    )
+    check("quic_h3", "quic ok /small" in out.stdout, (out.stdout or out.stderr).strip().splitlines()[-1][:80] if (out.stdout or out.stderr).strip() else "")
+except Exception as e:
+    check("quic_h3", False, type(e).__name__)
 
 print(json.dumps(results, indent=2))
 sys.exit(1 if failures else 0)

@@ -16,6 +16,7 @@ source "$HERE/netns.sh"
 cleanup() {
   [[ -n "${CAP_PID:-}" ]] && kill "$CAP_PID" 2>/dev/null || true
   [[ -n "${SRV_PID:-}" ]] && kill "$SRV_PID" 2>/dev/null || true
+  [[ -n "${QUIC_SRV_PID:-}" ]] && kill "$QUIC_SRV_PID" 2>/dev/null || true
   delete_namespaces
 }
 trap cleanup EXIT
@@ -37,6 +38,9 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=tls.example.test" \
 cat "$WORK/tls.pem.crt" >> "$WORK/tls.pem"
 ip netns exec "$SRV" python3 "$HERE/servers.py" 10.88.0.2 "$WORK/www" "$WORK/dot.log" "$WORK/tls.pem" ${HOST_IPV6:+fd00:88::2} &
 SRV_PID=$!
+# The QUIC/HTTP-3 server needs aioquic, so run it with the client's interpreter ($PYTHON).
+ip netns exec "$SRV" "$PYTHON" "$HERE/quic_server.py" 10.88.0.2 "$WORK/tls.pem" > "$WORK/quic_server.log" 2>&1 &
+QUIC_SRV_PID=$!
 
 ip netns exec "$CLI" "$WORK/host_capture" tal0 10000 10.77.0.2 10.88.0.2 "$WORK/batches.bin" > "$WORK/capture.log" 2>&1 &
 CAP_PID=$!
