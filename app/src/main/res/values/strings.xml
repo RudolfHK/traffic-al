@@ -113,6 +113,10 @@
     <string name="recordings_buffer">In memory</string>
     <string name="recordings_buffer_text">%1$d packets (the last 64 MB of this session)</string>
     <string name="recordings_empty">No recordings yet. One is saved while a capture runs.</string>
+    <string name="action_view">View</string>
+    <string name="recording_loading">Loading recording…</string>
+    <string name="recording_view_packets">%1$d packets</string>
+    <string name="recording_view_note">Loaded from a recording. Protocol and category labels are added by live analysis and aren\'t saved; connections show their server name instead.</string>
     <string name="recording_active">recording</string>
     <string name="recording_truncated">oldest part deleted</string>
     <string name="recording_segments">%1$d files</string>

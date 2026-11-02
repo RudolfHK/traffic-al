@@ -34,6 +34,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import io.github.rudolfhk.traffical.R
 import io.github.rudolfhk.traffical.capture.CaptureRepository
 import io.github.rudolfhk.traffical.capture.CaptureStatus
+import io.github.rudolfhk.traffical.capture.RecordingView
 import io.github.rudolfhk.traffical.core.analysis.ConnectionFilter
 import io.github.rudolfhk.traffical.core.analysis.DashboardData
 import io.github.rudolfhk.traffical.core.analysis.FlowPacket
@@ -99,6 +100,20 @@ class MainActions(
 
 @Composable
 fun MainScreen(actions: MainActions) {
+    // Opening a saved recording replaces the live screens with the recording viewer.
+    var recordingName by rememberSaveable { mutableStateOf<String?>(null) }
+    var recordingView by remember { mutableStateOf<RecordingView?>(null) }
+    LaunchedEffect(recordingName) {
+        val name = recordingName
+        recordingView = if (name == null) null else withContext(Dispatchers.IO) { CaptureRepository.loadRecording(name) }
+        if (name != null && recordingView == null) recordingName = null // gone or unreadable
+    }
+    if (recordingName != null) {
+        val view = recordingView
+        if (view == null) RecordingLoading(onCancel = { recordingName = null }) else RecordingViewer(view, onClose = { recordingName = null })
+        return
+    }
+
     val status by CaptureRepository.status.collectAsStateWithLifecycle()
     val connections by CaptureRepository.connections.collectAsStateWithLifecycle()
     val dnsEvents by CaptureRepository.dnsEvents.collectAsStateWithLifecycle()
@@ -187,6 +202,7 @@ fun MainScreen(actions: MainActions) {
                     settings = settings,
                     recorder = recorder,
                     bufferPackets = packetCount,
+                    onView = { recordingName = it.name },
                     onExport = { actions.exportRecording(it.name) },
                     onDelete = { recording ->
                         scope.launch {

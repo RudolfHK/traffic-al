@@ -45,6 +45,7 @@ fun RecordingsScreen(
     settings: AppSettings,
     recorder: RecorderStatus,
     bufferPackets: Int,
+    onView: (RecordingItem) -> Unit,
     onExport: (RecordingItem) -> Unit,
     onDelete: (RecordingItem) -> Unit,
     onExportBuffer: () -> Unit,
@@ -95,7 +96,12 @@ fun RecordingsScreen(
             recordings == null -> item { CircularProgressIndicator(Modifier.padding(16.dp)) }
             recordings.isEmpty() -> item { Note(text.recordingsEmpty, error = false) }
             else -> items(recordings, key = { it.name }) { recording ->
-                RecordingCard(recording, onExport = { onExport(recording) }, onDelete = { confirmDelete = recording })
+                RecordingCard(
+                    recording,
+                    onView = { onView(recording) },
+                    onExport = { onExport(recording) },
+                    onDelete = { confirmDelete = recording },
+                )
             }
         }
     }
@@ -119,7 +125,7 @@ fun RecordingsScreen(
 }
 
 @Composable
-private fun RecordingCard(recording: RecordingItem, onExport: () -> Unit, onDelete: () -> Unit) {
+private fun RecordingCard(recording: RecordingItem, onView: () -> Unit, onExport: () -> Unit, onDelete: () -> Unit) {
     val text = LocalUiText.current
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp)) {
@@ -139,6 +145,7 @@ private fun RecordingCard(recording: RecordingItem, onExport: () -> Unit, onDele
                     if (recording.truncated) LabelBadge(text.recordingTruncated, MaterialTheme.colorScheme.outline)
                 }
                 TextButton(onClick = onDelete, enabled = !recording.active) { Text(text.actionDelete) }
+                TextButton(onClick = onView) { Text(text.actionView) }
                 TextButton(onClick = onExport) { Text(text.actionExport) }
             }
         }

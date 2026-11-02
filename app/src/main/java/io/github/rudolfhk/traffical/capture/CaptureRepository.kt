@@ -19,6 +19,7 @@ import io.github.rudolfhk.traffical.core.capture.FlowTracker
 import io.github.rudolfhk.traffical.core.dns.DnsType
 import io.github.rudolfhk.traffical.core.pcap.PcapngWriter
 import io.github.rudolfhk.traffical.core.recording.ExportResult
+import io.github.rudolfhk.traffical.core.recording.RecordingReplay
 import io.github.rudolfhk.traffical.enrichment.EnrichmentStore
 import io.github.rudolfhk.traffical.history.History
 import io.github.rudolfhk.traffical.history.HistoryStore
@@ -295,6 +296,31 @@ object CaptureRepository {
     }
 
     fun deleteRecording(name: String): Boolean = recorder.delete(name).get()
+
+    /**
+     * Loads a finished recording for browsing like the live capture, or null if it is gone.
+     * Reads the whole recording to rebuild its flows, so call it off the main thread.
+     */
+    fun loadRecording(name: String): RecordingView? {
+        val (store, recording) = recorder.finishedRecording(name).get() ?: return null
+        val replay = RecordingReplay()
+        store.readPackets(recording) { replay.add(it.toCaptureRecord()) }
+        return RecordingView(
+            name = name,
+            startMillis = recording.startMillis,
+            endMillis = recording.endMillis,
+            packetCount = replay.packetCount,
+            bufferedPackets = replay.bufferedPackets,
+            replay = replay,
+            apps = apps,
+            enrichment = EnrichmentStore.current,
+        ).also {
+            // Build the connection and DNS lists now (on this background thread), not on the
+            // first frame of the viewer.
+            it.connections
+            it.dnsEvents
+        }
+    }
 
     /** Forgets the connections, lookups and packets, in memory and in the history; recordings stay. */
     fun clear() {

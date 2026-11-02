@@ -135,6 +135,40 @@ short, explicit phone checklist — the same split the performance check used.
 
 [VALIDATION.md](VALIDATION.md) has the full matrix: what CI checks and the phone checklist.
 
+## Phase 10 (improved): browse recordings and read packets
+
+After the first on-device test the request was two features: *"an option to look at
+recordings and all their data similar to when it happens live"*, and *"a feature to convert
+the sent and received packets, wherever possible with root, into human-readable format."*
+
+### Feature 1 — browse a saved recording like the live capture
+
+| Question | Decision | Why |
+| --- | --- | --- |
+| How to show a recording's data | Replay its packets through the same `FlowTracker` + `TrafficTimeline` the live capture uses, and show them in the same dashboard / connections / DNS / detail screens | The analysis core already takes `(flows, timeline)`, so a recording reuses it unchanged; no second UI. |
+| Direction (out/in), which the old PCAPNG didn't store | New recordings store it in the standard PCAPNG `epb_flags` option; a reader uses it, and infers it from the app-side address for older files | Direction drives byte counters and SNI parsing; `epb_flags` is the Wireshark-standard place and also labels direction there. |
+| nDPI protocol/category/rating on replay | **Not available** — those come from the native engine live and aren't in the file. Flows show the transport protocol and the SNI/DNS name instead | Re-running nDPI offline would mean feeding the vendored C library outside the engine; out of scope. Documented as the one thing replay lacks. |
+| Cost of loading a big recording | The viewer loads at most a bounded number of packets (newest first), like the live buffer | A multi-GB recording must not load wholesale onto the heap. |
+
+### Feature 2 — packets in human-readable form
+
+Principle, consistent with phase 8: **Traffic AL decodes what is already readable and
+decrypts only with keys the owner supplies** (the phase-8 key log, obtainable with root).
+
+| Part | Decision | Why |
+| --- | --- | --- |
+| 2a. Dissector | A `core` dissector renders each packet in layers: IPv4/IPv6 + TCP/UDP/ICMP header fields, then the payload — DNS, HTTP/1.x (request/response line and headers), the TLS record and handshake (ClientHello SNI, ServerHello version/cipher, certificate subjects), else printable text or a note. The detail view toggles **Decoded / Hex**. | Most of a capture is already readable (DNS, HTTP, TLS metadata); this needs no keys and works live and on recordings. Fully testable in `core`. |
+| 2b. Decryption ("with root") | When the owner's key log covers a session, **decrypt its TLS 1.3 application records in-app** and dissect the plaintext (so the HTTP inside shows). Keys come from the phase-8 `TlsKeyStore`. | This is the "with root" payoff: on a rooted device the owner can supply the keys, and the app then shows the encrypted content readable. Testable against the host test's real TLS 1.3 session. |
+| TLS 1.2 and QUIC decryption | Documented follow-ups, not built now | TLS 1.2 has many cipher variants and QUIC needs its own key schedule; neither is exercised by the host test, so neither can be built responsibly in this pass. TLS 1.3 is almost all current HTTPS. |
+
+Impacts: the dissector must never crash the UI on malformed or truncated payloads (it
+degrades to hex); decryption uses only owner-supplied keys and nothing new leaves the
+device; the recording viewer and the dissector are both reused live and on recordings.
+
+Tested in `core` (dissector, PCAPNG reader, TLS 1.3 decryption) and on the host (the reader
+round-trips a real capture; the decryptor reads the host test's HTTPS from its key log).
+The screens are checked by the Compose Desktop preview; the on-device feel is a phone check.
+
 ## The prompt
 
 ```markdown

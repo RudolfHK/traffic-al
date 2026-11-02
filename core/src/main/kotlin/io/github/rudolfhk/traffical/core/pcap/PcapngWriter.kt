@@ -33,15 +33,20 @@ class PcapngWriter(
         out.write(Pcapng.tlsKeyLog(keyLog))
     }
 
-    /** Writes one packet; [comment] shows up as the packet comment in Wireshark. */
+    /**
+     * Writes one packet; [comment] shows up as the packet comment in Wireshark.
+     * [direction] is [Pcapng.DIR_OUTBOUND] or [Pcapng.DIR_INBOUND] (stored as epb_flags so
+     * the recording can be replayed in the app and Wireshark shows the direction).
+     */
     fun writePacket(
         timestampMicros: Long,
         data: ByteArray,
         offset: Int = 0,
         length: Int = data.size - offset,
         comment: String? = null,
+        direction: Int = Pcapng.DIR_UNKNOWN,
     ) {
-        out.write(Pcapng.packet(timestampMicros, data, offset, length, comment, snapLength))
+        out.write(Pcapng.packet(timestampMicros, data, offset, length, comment, snapLength, direction))
     }
 
     fun flush() = out.flush()
@@ -76,6 +81,12 @@ object Pcapng {
     private const val OPT_COMMENT = 1
     private const val SHB_USERAPPL = 4
     private const val IF_NAME = 2
+    private const val EPB_FLAGS = 2
+
+    /** epb_flags direction (bits 0-1): not known, inbound (network to app), outbound (app to network). */
+    const val DIR_UNKNOWN = 0
+    const val DIR_INBOUND = 1
+    const val DIR_OUTBOUND = 2
 
     fun header(application: String = APPLICATION, interfaceName: String = INTERFACE, snapLength: Int = SNAP_LENGTH): ByteArray {
         val shbOptions = listOf(SHB_USERAPPL to application.toByteArray(Charsets.UTF_8))
@@ -105,9 +116,15 @@ object Pcapng {
         length: Int = data.size - offset,
         comment: String? = null,
         snapLength: Int = SNAP_LENGTH,
+        direction: Int = DIR_UNKNOWN,
     ): ByteArray {
         val captured = minOf(length, snapLength)
-        val options = comment?.let { listOf(OPT_COMMENT to it.toByteArray(Charsets.UTF_8)) }.orEmpty()
+        val options = buildList {
+            comment?.let { add(OPT_COMMENT to it.toByteArray(Charsets.UTF_8)) }
+            if (direction != DIR_UNKNOWN) {
+                add(EPB_FLAGS to ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(direction and 0x3).array())
+            }
+        }
         val block = block(BLOCK_ENHANCED_PACKET, 20 + padded(captured) + optionsLength(options))
         block.putInt(0) // interface id
         block.putInt((timestampMicros ushr 32).toInt())

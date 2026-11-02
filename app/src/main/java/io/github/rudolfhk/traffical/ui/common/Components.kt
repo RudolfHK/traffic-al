@@ -56,6 +56,7 @@ fun TrafficAlScaffold(
     onTabSelected: (Tab) -> Unit,
     title: String,
     onBack: (() -> Unit)?,
+    tabs: Set<Tab> = Tab.values().toSet(),
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val text = LocalUiText.current
@@ -74,25 +75,25 @@ fun TrafficAlScaffold(
         },
         bottomBar = {
             NavigationBar {
-                NavigationBarItem(
+                if (Tab.DASHBOARD in tabs) NavigationBarItem(
                     selected = tab == Tab.DASHBOARD,
                     onClick = { onTabSelected(Tab.DASHBOARD) },
                     icon = { Icon(Icons.Filled.Home, contentDescription = null) },
                     label = { Text(text.tabDashboard) },
                 )
-                NavigationBarItem(
+                if (Tab.CONNECTIONS in tabs) NavigationBarItem(
                     selected = tab == Tab.CONNECTIONS,
                     onClick = { onTabSelected(Tab.CONNECTIONS) },
                     icon = { Icon(Icons.Filled.List, contentDescription = null) },
                     label = { Text(text.tabConnections) },
                 )
-                NavigationBarItem(
+                if (Tab.DNS in tabs) NavigationBarItem(
                     selected = tab == Tab.DNS,
                     onClick = { onTabSelected(Tab.DNS) },
                     icon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     label = { Text(text.tabDns) },
                 )
-                NavigationBarItem(
+                if (Tab.SETTINGS in tabs) NavigationBarItem(
                     selected = tab == Tab.SETTINGS,
                     onClick = { onTabSelected(Tab.SETTINGS) },
                     icon = { Icon(Icons.Filled.Settings, contentDescription = null) },

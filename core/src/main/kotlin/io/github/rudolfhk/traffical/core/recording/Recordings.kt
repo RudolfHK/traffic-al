@@ -1,6 +1,8 @@
 package io.github.rudolfhk.traffical.core.recording
 
 import io.github.rudolfhk.traffical.core.pcap.Pcapng
+import io.github.rudolfhk.traffical.core.pcap.PcapngReader
+import io.github.rudolfhk.traffical.core.pcap.RecordedPacket
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.Closeable
@@ -101,6 +103,24 @@ class RecordingStore(val root: File, val codec: SegmentCodec) {
         }
         out.flush()
         return ExportResult(bytes, packets, damaged)
+    }
+
+    /**
+     * Reads the packets of [recording] decrypted, oldest first, for replay in the app. A
+     * segment that can't be opened or decrypted is skipped; a truncated one contributes what
+     * it has (see [PcapngReader]).
+     */
+    fun readPackets(recording: Recording, onPacket: (RecordedPacket) -> Unit) {
+        for (segment in recording.segments) {
+            try {
+                segment.inputStream().use { file ->
+                    val input = codec.decrypting(BufferedInputStream(file, BUFFER_SIZE), associatedData(recording.name, segment))
+                    PcapngReader.forEach(input, onPacket)
+                }
+            } catch (e: IOException) {
+                // could not open the segment; skip it
+            }
+        }
     }
 
     fun delete(recording: Recording): Boolean = recording.directory.deleteRecursively()
@@ -220,8 +240,8 @@ class RecordingWriter internal constructor(
     var bytes = 0L
         private set
 
-    fun write(timestampMicros: Long, data: ByteArray, comment: String?) {
-        val block = Pcapng.packet(timestampMicros, data, comment = comment)
+    fun write(timestampMicros: Long, data: ByteArray, comment: String?, direction: Int = Pcapng.DIR_UNKNOWN) {
+        val block = Pcapng.packet(timestampMicros, data, comment = comment, direction = direction)
         val stream = out?.takeIf { segmentWritten < segmentBytes } ?: startSegment()
         stream.write(block)
         segmentWritten += block.size

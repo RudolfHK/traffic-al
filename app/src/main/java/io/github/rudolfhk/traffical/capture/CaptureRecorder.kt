@@ -2,6 +2,8 @@ package io.github.rudolfhk.traffical.capture
 
 import android.util.Log
 import io.github.rudolfhk.traffical.core.capture.CaptureRecord
+import io.github.rudolfhk.traffical.core.capture.Direction
+import io.github.rudolfhk.traffical.core.pcap.Pcapng
 import io.github.rudolfhk.traffical.core.recording.Recording
 import io.github.rudolfhk.traffical.core.recording.RecordingStore
 import io.github.rudolfhk.traffical.core.recording.RecordingWriter
@@ -146,7 +148,10 @@ class CaptureRecorder(
         if (!running) return
         val recording = writer ?: return
         try {
-            for (record in records) recording.write(record.timestampMicros, record.packet, comment(record))
+            for (record in records) {
+                val direction = if (record.direction == Direction.OUT) Pcapng.DIR_OUTBOUND else Pcapng.DIR_INBOUND
+                recording.write(record.timestampMicros, record.packet, comment(record), direction)
+            }
             recording.flush()
         } catch (e: IOException) {
             Log.e(TAG, "recording stopped", e)

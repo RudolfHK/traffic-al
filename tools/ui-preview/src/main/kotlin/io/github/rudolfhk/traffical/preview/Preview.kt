@@ -154,6 +154,7 @@ fun main(args: Array<String>) {
                 settings = sample.settings,
                 recorder = sample.recorder,
                 bufferPackets = 48_213,
+                onView = {},
                 onExport = {},
                 onDelete = {},
                 onExportBuffer = {},
