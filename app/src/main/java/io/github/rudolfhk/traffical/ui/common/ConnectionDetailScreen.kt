@@ -13,6 +13,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -28,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import io.github.rudolfhk.traffical.core.analysis.FlowPacket
 import io.github.rudolfhk.traffical.core.analysis.Format
 import io.github.rudolfhk.traffical.core.analysis.HexDump
+import io.github.rudolfhk.traffical.core.analysis.PacketDecoder
 import io.github.rudolfhk.traffical.core.analysis.flags
 import io.github.rudolfhk.traffical.core.analysis.protocolLabel
 import io.github.rudolfhk.traffical.core.capture.Direction
@@ -67,6 +70,7 @@ fun ConnectionDetailScreen(
     val text = LocalUiText.current
     val flow = connection.flow
     val destination = connection.destination
+    var decoded by remember { mutableStateOf(true) }
     val durationMicros = flow.lastSeenMicros - flow.firstSeenMicros
     val rate = if (durationMicros > 0) (flow.bytesOut + flow.bytesIn) * 1_000_000 / durationMicros else 0L
     val encrypted = flow.protocolLabel == "TLS" || flow.protocolLabel == "QUIC"
@@ -120,6 +124,15 @@ fun ConnectionDetailScreen(
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
             }
+            if (!packets.isNullOrEmpty()) {
+                Row(
+                    Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ModeChip(text.detailDecoded, decoded) { decoded = true }
+                    ModeChip(text.detailHex, !decoded) { decoded = false }
+                }
+            }
         }
         when {
             packets == null -> item { CircularProgressIndicator(Modifier.padding(16.dp)) }
@@ -130,7 +143,7 @@ fun ConnectionDetailScreen(
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
             }
-            else -> items(packets) { packet -> PacketCard(packet) }
+            else -> items(packets) { packet -> PacketCard(packet, decoded, flow.protocol, flow.remotePort) }
         }
     }
 }
@@ -193,18 +206,30 @@ private fun OwnerCard(owner: OwnerState, onLookup: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PacketCard(packet: FlowPacket) {
+private fun ModeChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(selected = selected, onClick = onClick, label = { Text(label) })
+}
+
+@Composable
+private fun PacketCard(packet: FlowPacket, decoded: Boolean, protocol: Int, remotePort: Int) {
     val text = LocalUiText.current
-    var expanded by remember { mutableStateOf(false) }
-    val dump = remember(packet) { HexDump.lines(packet.payload, width = DUMP_WIDTH) }
+    var expanded by remember(decoded) { mutableStateOf(false) }
     val outgoing = packet.direction == Direction.OUT
+    val dump = remember(packet) { HexDump.lines(packet.payload, width = DUMP_WIDTH) }
+    val decode = remember(packet) {
+        PacketDecoder.decode(packet.payload, protocol, remotePort, outgoing = outgoing)
+    }
+    // Decoded mode shows the summary plus its detail lines; hex mode shows the dump.
+    val body = if (decoded) decode.lines else dump
+    val collapsedLines = if (decoded) 3 else COLLAPSED_DUMP_LINES
 
     Card(
         modifier = Modifier
             .padding(horizontal = 16.dp)
             .fillMaxWidth()
-            .clickable(enabled = dump.size > COLLAPSED_DUMP_LINES) { expanded = !expanded },
+            .clickable(enabled = body.size > collapsedLines) { expanded = !expanded },
         colors = CardDefaults.cardColors(
             containerColor = if (outgoing) {
                 MaterialTheme.colorScheme.primaryContainer
@@ -225,12 +250,15 @@ private fun PacketCard(packet: FlowPacket) {
                 style = MaterialTheme.typography.labelMedium,
                 fontFamily = FontFamily.Monospace,
             )
-            val shown = if (expanded) dump else dump.take(COLLAPSED_DUMP_LINES)
-            for (line in shown) {
-                Text(line, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, maxLines = 1)
+            if (decoded && packet.payload.isNotEmpty()) {
+                Text(decode.summary, style = MaterialTheme.typography.labelMedium)
             }
-            if (!expanded && dump.size > COLLAPSED_DUMP_LINES) {
-                Text("… +${dump.size - COLLAPSED_DUMP_LINES}", style = MaterialTheme.typography.labelSmall)
+            val shown = if (expanded) body else body.take(collapsedLines)
+            for (line in shown) {
+                Text(line, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, maxLines = 2)
+            }
+            if (!expanded && body.size > collapsedLines) {
+                Text("… +${body.size - collapsedLines}", style = MaterialTheme.typography.labelSmall)
             }
         }
     }

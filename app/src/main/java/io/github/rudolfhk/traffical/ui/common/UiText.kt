@@ -61,6 +61,8 @@ data class UiText(
     val detailNoPackets: String,
     val detailPayload: String,
     val detailEncryptedHint: String,
+    val detailDecoded: String,
+    val detailHex: String,
     val dnsEmpty: String,
     val tabSettings: String,
     val actionExport: String,

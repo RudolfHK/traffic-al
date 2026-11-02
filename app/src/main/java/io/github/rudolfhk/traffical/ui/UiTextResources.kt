@@ -66,6 +66,8 @@ fun rememberUiText(): UiText {
             detailNoPackets = res.getString(R.string.detail_no_packets),
             detailPayload = res.getString(R.string.detail_payload),
             detailEncryptedHint = res.getString(R.string.detail_encrypted_hint),
+            detailDecoded = res.getString(R.string.detail_decoded),
+            detailHex = res.getString(R.string.detail_hex),
             dnsEmpty = res.getString(R.string.dns_empty),
             tabSettings = res.getString(R.string.tab_settings),
             actionExport = res.getString(R.string.action_export),

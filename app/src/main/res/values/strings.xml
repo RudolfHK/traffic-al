@@ -72,7 +72,9 @@
     <string name="detail_packets">Packets</string>
     <string name="detail_no_packets">No packets of this connection in the capture buffer.</string>
     <string name="detail_payload">%1$d B payload</string>
-    <string name="detail_encrypted_hint">TLS and QUIC payloads are encrypted: the hex dump shows the encrypted bytes.</string>
+    <string name="detail_encrypted_hint">TLS and QUIC payloads are encrypted: the decoded view shows the handshake and marks application data as encrypted.</string>
+    <string name="detail_decoded">Decoded</string>
+    <string name="detail_hex">Hex</string>
     <string name="tab_settings">Settings</string>
     <string name="action_export">Export</string>
     <string name="action_delete">Delete</string>
