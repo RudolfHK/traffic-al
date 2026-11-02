@@ -47,14 +47,21 @@ fun main(args: Array<String>) {
     for (clientPort in clientStreams.keys) {
         val client = clientStreams[clientPort]?.toByteArray() ?: continue
         val server = serverStreams[clientPort]?.toByteArray() ?: continue
-        val transcript = Tls13Decryptor.decrypt(client, server, keyLog) ?: continue
-        if (transcript.isEmpty) continue
+
+        val tls13 = Tls13Decryptor.decrypt(client, server, keyLog)?.takeUnless { it.isEmpty }
+        val (version, c2s, s2c, records) = when {
+            tls13 != null -> listOf("TLS1.3", tls13.clientToServer, tls13.serverToClient, tls13.records)
+            else -> {
+                val tls12 = io.github.rudolfhk.traffical.core.tls.Tls12Decryptor.decrypt(client, server, keyLog)?.takeUnless { it.isEmpty } ?: continue
+                listOf("TLS1.2", tls12.clientToServer, tls12.serverToClient, tls12.records)
+            }
+        }
         decryptedConnections++
-        println("--- connection from port $clientPort (${transcript.records} records) ---")
+        println("--- $version connection from port $clientPort ($records records) ---")
         println("client -> server:")
-        println(String(transcript.clientToServer, Charsets.ISO_8859_1))
+        println(String(c2s as ByteArray, Charsets.ISO_8859_1))
         println("server -> client (first 500 bytes):")
-        println(String(transcript.serverToClient.copyOf(minOf(500, transcript.serverToClient.size)), Charsets.ISO_8859_1))
+        println(String((s2c as ByteArray).copyOf(minOf(500, s2c.size)), Charsets.ISO_8859_1))
     }
     System.err.println("decrypted $decryptedConnections TLS connection(s) on port $serverPort")
     if (decryptedConnections == 0) exitProcess(1)

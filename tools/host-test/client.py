@@ -241,6 +241,29 @@ try:
 except OSError as e:
     check("tls_download", False, type(e).__name__)
 
+# A second TLS leg forced to TLS 1.2, so the in-app TLS 1.2 decryptor is exercised too
+# (phase 11). Its master secret goes to the same key log.
+try:
+    tls12 = ssl.create_default_context()
+    tls12.check_hostname = False
+    tls12.verify_mode = ssl.CERT_NONE
+    tls12.minimum_version = ssl.TLSVersion.TLSv1_2
+    tls12.maximum_version = ssl.TLSVersion.TLSv1_2
+    keylog = os.environ.get("TLS_KEYLOG")
+    if keylog:
+        tls12.keylog_filename = keylog
+    with socket.create_connection((SERVER, 8443), timeout=5) as raw, \
+            tls12.wrap_socket(raw, server_hostname="tls.example.test") as s:
+        version = s.version()
+        s.sendall(b"GET /small HTTP/1.0\r\nHost: tls12.example.test\r\n\r\n")
+        body = b""
+        while chunk := s.recv(1 << 16):
+            body += chunk
+    ok = version == "TLSv1.2" and hashlib.sha256(body[body.index(b"\r\n\r\n") + 4:]).hexdigest() == EXPECTED["small"]
+    check("tls12_download", ok, version)
+except OSError as e:
+    check("tls12_download", False, type(e).__name__)
+
 # QUIC: the client Initial carries the SNI; no QUIC server is needed for detection.
 try:
     from aioquic.quic.configuration import QuicConfiguration

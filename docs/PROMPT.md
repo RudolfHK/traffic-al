@@ -169,6 +169,27 @@ Tested in `core` (dissector, PCAPNG reader, TLS 1.3 decryption) and on the host 
 round-trips a real capture; the decryptor reads the host test's HTTPS from its key log).
 The screens are checked by the Compose Desktop preview; the on-device feel is a phone check.
 
+## Phase 11 (improved): more decryption (TLS 1.2, QUIC, root key capture)
+
+The request: *"readable packets is implemented but many are encrypted — how do we decrypt
+more? it's still my data."* The constraint is unchanged: Traffic AL cannot break TLS; it can
+only read what the owner has keys for. So "decrypt more" is two separate problems — **cover
+more formats** once keys exist, and **obtain keys for more sessions**. Pinned or hardened
+apps stay opaque regardless; no tool reads them without patching the app.
+
+| Part | Decision | Why |
+| --- | --- | --- |
+| 11a. TLS 1.2 | Decrypt TLS 1.2 AEAD suites (AES-GCM, ChaCha20-Poly1305) from a `CLIENT_RANDOM` key log: PRF key expansion, per-record GCM/ChaCha nonces, deterministic record sequence. | Still common; small and fully testable on the host (force TLS 1.2 in a client leg). CBC suites are legacy — documented, not built. |
+| 11b. QUIC / HTTP-3 | Decrypt QUIC packets (header protection removal, packet-number recovery, AEAD) from the key log, and surface the CRYPTO/STREAM frame content. | QUIC is a large share of modern traffic. Large subsystem (packet protection + frames, then HTTP/3 + QPACK for full readability); staged, tested with an aioquic session + key log on the host. |
+| 11c. Root key capture | With root, the app starts a key-logging agent (instrumentation of the apps' TLS libraries) that writes the key log Traffic AL already reads — so other apps' sessions decrypt without the owner placing a file by hand. | This is the only way to read *other* apps without a MITM, and it is how comparable tools do it. **Device-only: it cannot be built against a rooted phone in CI, so it ships as a mechanism the owner enables and verifies on their device**, opt-in and reversible. Pinned/anti-instrumentation apps still won't open. |
+| MITM proxy + system CA | Not built | Certificate pinning defeats it for the apps that matter, for a large build. The owner can still use the exported CA with external mitmproxy (docs/DECRYPTION.md). |
+
+Impacts: 11a/11b only widen what a key log unlocks — they change nothing about the privacy
+posture (owner-supplied keys, nothing leaves the device). 11c is a real capability jump and
+the honest limits must be loud in the UI: it needs root, it can disturb or crash hardened
+apps, and pinned apps stay unreadable. 11a and 11b are verified in `core` and on the host;
+11c is verified by the owner on the phone.
+
 ## The prompt
 
 ```markdown

@@ -28,9 +28,12 @@ if [[ -s "$WORK/keylog.txt" ]]; then
   # phase 10: the in-app TLS 1.3 decryptor recovers the HTTP from the same key log.
   "$HERE/../../gradlew" -q -p "$HERE/../../core" tlsDecrypt \
     --args="$WORK/batches.bin $WORK/keylog.txt 8443" > "$OUT/tls-decrypt.txt"
-  if grep -q "GET /small" "$OUT/tls-decrypt.txt"; then
-    echo "OK: in-app TLS 1.3 decryption recovered the HTTP request"
-  else
-    echo "FAIL: in-app TLS 1.3 decryption did not recover the request"; head "$OUT/tls-decrypt.txt"; exit 1
-  fi
+  # Both the TLS 1.3 and the TLS 1.2 leg must come back readable.
+  for host in tls.example.test tls12.example.test; do
+    if grep -aq "Host: $host" "$OUT/tls-decrypt.txt"; then
+      echo "OK: in-app decryption recovered the request to $host"
+    else
+      echo "FAIL: in-app TLS decryption did not recover the request to $host"; grep -a "connection from port" "$OUT/tls-decrypt.txt"; exit 1
+    fi
+  done
 fi

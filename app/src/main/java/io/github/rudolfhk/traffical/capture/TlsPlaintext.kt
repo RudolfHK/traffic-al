@@ -4,6 +4,7 @@ import io.github.rudolfhk.traffical.core.analysis.FlowPacket
 import io.github.rudolfhk.traffical.core.capture.Direction
 import io.github.rudolfhk.traffical.core.capture.FlowInfo
 import io.github.rudolfhk.traffical.core.packet.IpProtocol
+import io.github.rudolfhk.traffical.core.tls.Tls12Decryptor
 import io.github.rudolfhk.traffical.core.tls.Tls13Decryptor
 import io.github.rudolfhk.traffical.core.tls.TlsKeyLog
 import java.io.ByteArrayOutputStream
@@ -30,11 +31,23 @@ object TlsPlaintext {
         for (packet in packets) {
             (if (packet.direction == Direction.OUT) client else server).write(packet.payload)
         }
-        val transcript = Tls13Decryptor.decrypt(client.toByteArray(), server.toByteArray(), keyLog) ?: return null
-        if (transcript.isEmpty) return null
+        val c = client.toByteArray()
+        val s = server.toByteArray()
+        // TLS 1.3 first, then TLS 1.2; whichever has the keys for this session.
+        val toServer: ByteArray
+        val toClient: ByteArray
+        val tls13 = Tls13Decryptor.decrypt(c, s, keyLog)?.takeUnless { it.isEmpty }
+        if (tls13 != null) {
+            toServer = tls13.clientToServer
+            toClient = tls13.serverToClient
+        } else {
+            val tls12 = Tls12Decryptor.decrypt(c, s, keyLog)?.takeUnless { it.isEmpty } ?: return null
+            toServer = tls12.clientToServer
+            toClient = tls12.serverToClient
+        }
         return Result(
-            toServer = String(transcript.clientToServer, Charsets.ISO_8859_1).take(MAX_CHARS),
-            toClient = String(transcript.serverToClient, Charsets.ISO_8859_1).take(MAX_CHARS),
+            toServer = String(toServer, Charsets.ISO_8859_1).take(MAX_CHARS),
+            toClient = String(toClient, Charsets.ISO_8859_1).take(MAX_CHARS),
         )
     }
 }
