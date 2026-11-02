@@ -35,6 +35,7 @@ import io.github.rudolfhk.traffical.R
 import io.github.rudolfhk.traffical.capture.CaptureRepository
 import io.github.rudolfhk.traffical.capture.CaptureStatus
 import io.github.rudolfhk.traffical.capture.RecordingView
+import io.github.rudolfhk.traffical.capture.TlsPlaintext
 import io.github.rudolfhk.traffical.core.analysis.ConnectionFilter
 import io.github.rudolfhk.traffical.core.analysis.DashboardData
 import io.github.rudolfhk.traffical.core.analysis.FlowPacket
@@ -174,8 +175,13 @@ fun MainScreen(actions: MainActions) {
                 var packets by remember(detail.flow.id, detail.flow.closed) {
                     mutableStateOf<List<FlowPacket>?>(null)
                 }
+                var decrypted by remember(detail.flow.id, detail.flow.closed) {
+                    mutableStateOf<TlsPlaintext.Result?>(null)
+                }
                 LaunchedEffect(detail.flow.id, detail.flow.closed) {
-                    packets = withContext(Dispatchers.Default) { CaptureRepository.packetsOf(detail) }
+                    val loaded = withContext(Dispatchers.Default) { CaptureRepository.packetsOf(detail) }
+                    packets = loaded
+                    decrypted = withContext(Dispatchers.Default) { TlsPlaintext.of(loaded, detail.flow) }
                 }
                 var owner by remember(detail.flow.id) { mutableStateOf(OwnerState()) }
                 val scope = rememberCoroutineScope()
@@ -191,6 +197,8 @@ fun MainScreen(actions: MainActions) {
                         }
                     },
                     modifier = modifier,
+                    decryptedRequest = decrypted?.toServer,
+                    decryptedResponse = decrypted?.toClient,
                 )
             }
             showRecordings -> {

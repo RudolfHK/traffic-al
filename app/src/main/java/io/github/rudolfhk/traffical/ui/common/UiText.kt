@@ -63,6 +63,7 @@ data class UiText(
     val detailEncryptedHint: String,
     val detailDecoded: String,
     val detailHex: String,
+    val detailDecryptedTls: String,
     val dnsEmpty: String,
     val tabSettings: String,
     val actionExport: String,

@@ -19,6 +19,7 @@ remote VPN server, no root required. The project prompt and phase plan are in
 | 7 | Destinations: country and network of every server (offline), known trackers with company and category, owner lookup (RDAP, reverse DNS) on request | done (needs on-device test) |
 | 8 | TLS decryption: embed an owner-supplied TLS key log so Wireshark decrypts the recording, decryption verified with tshark | done (needs on-device test) |
 | 9 | Validation: known traffic vs tshark, IPv6 through the engine, recordings and edge cases in CI; a phone checklist for the rest ([docs/VALIDATION.md](docs/VALIDATION.md)) | done (needs on-device test) |
+| 10 | Browse a saved recording like the live capture; decode packets to human-readable form (DNS, HTTP, TLS handshake), and decrypt TLS 1.3 in the app with owner-supplied keys | done (needs on-device test) |
 
 ## How it works
 
@@ -262,7 +263,11 @@ through the real VPN (`tools/emulator/bench.py`).
 - Android shows its VPN key icon whenever a VPN runs; the app does not hide it.
 - TLS is shown decrypted only for sessions you have the keys for (your own app via
   `SSLKEYLOGFILE`, or a key log placed with root); the app never breaks TLS and pinned
-  apps stay opaque ([docs/DECRYPTION.md](docs/DECRYPTION.md)).
+  apps stay opaque ([docs/DECRYPTION.md](docs/DECRYPTION.md)). In-app decryption covers
+  TLS 1.3 (AES-GCM, ChaCha20-Poly1305); TLS 1.2 and QUIC need Wireshark with the exported
+  key log.
+- A recording opened in the app shows its connections, DNS and packets like the live view,
+  but without the nDPI protocol/category labels, which are produced live and not saved.
 - Country and network describe the server's address, not the company behind a domain;
   CDNs (Akamai, Cloudflare, Fastly) serve many companies. The country is where the
   address is registered or announced, which may differ from where the server stands.

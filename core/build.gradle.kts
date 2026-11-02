@@ -54,6 +54,12 @@ tasks.register<JavaExec>("decryptCheck") {
     mainClass.set("io.github.rudolfhk.traffical.core.tools.DecryptCheckKt")
 }
 
+tasks.register<JavaExec>("tlsDecrypt") {
+    description = "Decrypts a host-test capture's TLS 1.3 with its key log, like the app (see tools/host-test)."
+    classpath = tools.runtimeClasspath
+    mainClass.set("io.github.rudolfhk.traffical.core.tools.TlsDecryptKt")
+}
+
 tasks.register<JavaExec>("benchmark") {
     description = "Measures the Kotlin capture pipeline, UI work and recording (see docs/PERFORMANCE.md)."
     classpath = tools.runtimeClasspath

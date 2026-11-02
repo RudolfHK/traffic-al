@@ -28,6 +28,13 @@ automatically — no Wireshark settings needed.
 
 The settings screen shows how many TLS sessions the placed key log covers.
 
+**In the app, too.** Once the key log is in place, the connection detail (live and in a
+recording) shows a **Decrypted (TLS)** section for TLS 1.3 connections it has keys for: the
+request and the response in the clear, right next to the Decoded/Hex packet views. This
+needs no export and no Wireshark. Only TLS 1.3 with an AES-GCM or ChaCha20-Poly1305 cipher
+is decrypted in the app; TLS 1.2 and QUIC still need Wireshark with the exported key log,
+and pinned apps stay opaque.
+
 ## Getting the keys
 
 You need the TLS keys for the traffic you want to read. There are three ways, all under

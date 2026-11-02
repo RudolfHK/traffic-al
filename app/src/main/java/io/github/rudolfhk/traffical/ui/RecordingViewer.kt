@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.rudolfhk.traffical.capture.RecordingView
+import io.github.rudolfhk.traffical.capture.TlsPlaintext
 import io.github.rudolfhk.traffical.core.analysis.ConnectionFilter
 import io.github.rudolfhk.traffical.core.analysis.FlowPacket
 import io.github.rudolfhk.traffical.core.analysis.Format
@@ -93,7 +94,12 @@ fun RecordingViewer(view: RecordingView, onClose: () -> Unit, modifier: Modifier
         when {
             detail != null -> {
                 var packets by remember(detail.flow.id) { mutableStateOf<List<FlowPacket>?>(null) }
-                LaunchedEffect(detail.flow.id) { packets = withContext(Dispatchers.Default) { view.packetsOf(detail) } }
+                var decrypted by remember(detail.flow.id) { mutableStateOf<TlsPlaintext.Result?>(null) }
+                LaunchedEffect(detail.flow.id) {
+                    val loaded = withContext(Dispatchers.Default) { view.packetsOf(detail) }
+                    packets = loaded
+                    decrypted = withContext(Dispatchers.Default) { TlsPlaintext.of(loaded, detail.flow) }
+                }
                 var owner by remember(detail.flow.id) { mutableStateOf(OwnerState()) }
                 val scope = rememberCoroutineScope()
                 ConnectionDetailScreen(
@@ -108,6 +114,8 @@ fun RecordingViewer(view: RecordingView, onClose: () -> Unit, modifier: Modifier
                         }
                     },
                     modifier = screen,
+                    decryptedRequest = decrypted?.toServer,
+                    decryptedResponse = decrypted?.toClient,
                 )
             }
             tab == Tab.CONNECTIONS -> ConnectionsScreen(

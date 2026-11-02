@@ -68,6 +68,7 @@ fun rememberUiText(): UiText {
             detailEncryptedHint = res.getString(R.string.detail_encrypted_hint),
             detailDecoded = res.getString(R.string.detail_decoded),
             detailHex = res.getString(R.string.detail_hex),
+            detailDecryptedTls = res.getString(R.string.detail_decrypted_tls),
             dnsEmpty = res.getString(R.string.dns_empty),
             tabSettings = res.getString(R.string.tab_settings),
             actionExport = res.getString(R.string.action_export),

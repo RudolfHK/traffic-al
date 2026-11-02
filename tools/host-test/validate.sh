@@ -24,4 +24,13 @@ if [[ -s "$WORK/keylog.txt" ]]; then
   "$HERE/../../gradlew" -q -p "$HERE/../../core" decryptCheck \
     --args="$WORK/batches.bin $WORK/keylog.txt $OUT/decrypted.pcapng"
   python3 "$HERE/validate_decrypt.py" "$OUT/decrypted.pcapng"
+
+  # phase 10: the in-app TLS 1.3 decryptor recovers the HTTP from the same key log.
+  "$HERE/../../gradlew" -q -p "$HERE/../../core" tlsDecrypt \
+    --args="$WORK/batches.bin $WORK/keylog.txt 8443" > "$OUT/tls-decrypt.txt"
+  if grep -q "GET /small" "$OUT/tls-decrypt.txt"; then
+    echo "OK: in-app TLS 1.3 decryption recovered the HTTP request"
+  else
+    echo "FAIL: in-app TLS 1.3 decryption did not recover the request"; head "$OUT/tls-decrypt.txt"; exit 1
+  fi
 fi

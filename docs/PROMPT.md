@@ -327,13 +327,15 @@ no Wi-Fi monitor mode, no capturing other devices.
 ## Recommended usage
 
 - Start each Claude Code session with the prompt above plus "Implement phase N".
-- All phases (1 to 9) are implemented in this repository (phase 3 with nDPI 5.0 for
-  protocol/service detection and QUIC/HTTP server names; flows and recordings are checked
-  against tshark in CI, the encrypted storage and the bundled data on an Android 10
-  emulator; phase 8 as the decryption-secrets pipeline above, decryption verified with
-  tshark in CI; phase 9 as the validation in docs/VALIDATION.md). What remains is the
-  on-device pass: every phase is marked "needs on-device test", and the phone checklists in
-  docs/VALIDATION.md and docs/PERFORMANCE.md are the way to clear it.
+- All phases (1 to 9) plus the phase-10 features are implemented in this repository (phase 3
+  with nDPI 5.0 for protocol/service detection and QUIC/HTTP server names; flows and
+  recordings are checked against tshark in CI, the encrypted storage and the bundled data on
+  an Android 10 emulator; phase 8 as the decryption-secrets pipeline above, decryption
+  verified with tshark in CI; phase 9 as the validation in docs/VALIDATION.md; phase 10 as
+  the recording viewer, the packet decoder and in-app TLS 1.3 decryption, the decoder and
+  decryptor tested in core and on the host). What remains is the on-device pass: every phase
+  is marked "needs on-device test", and the phone checklists in docs/VALIDATION.md and
+  docs/PERFORMANCE.md are the way to clear it.
 - Decision taken for 8: Traffic AL embeds an owner-supplied TLS key log so Wireshark
   decrypts the recording, and does not build a TLS-terminating proxy or generate a CA
   (docs/DECRYPTION.md). The "phases 6–10" in the table above is the original numbering; the

@@ -66,6 +66,9 @@ fun ConnectionDetailScreen(
     owner: OwnerState,
     onLookupOwner: () -> Unit,
     modifier: Modifier = Modifier,
+    /** TLS 1.3 application data decrypted with the owner's keys (phase 8), if available. */
+    decryptedRequest: String? = null,
+    decryptedResponse: String? = null,
 ) {
     val text = LocalUiText.current
     val flow = connection.flow
@@ -109,6 +112,9 @@ fun ConnectionDetailScreen(
             }
         }
         item { InfoCard(rows) }
+        if (decryptedRequest != null || decryptedResponse != null) {
+            item { DecryptedCard(decryptedRequest, decryptedResponse) }
+        }
         item { OwnerCard(owner, onLookupOwner) }
         item {
             Text(
@@ -202,6 +208,27 @@ private fun OwnerCard(owner: OwnerState, onLookup: () -> Unit) {
             info.error?.let {
                 Text(text.ownerFailed.format(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
+        }
+    }
+}
+
+/** The TLS 1.3 application data decrypted with the owner's keys (phase 8). */
+@Composable
+private fun DecryptedCard(request: String?, response: String?) {
+    val text = LocalUiText.current
+    var expanded by remember { mutableStateOf(false) }
+    Card(
+        Modifier.padding(horizontal = 16.dp).fillMaxWidth().clickable { expanded = !expanded },
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(text.detailDecryptedTls, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            val cap = if (expanded) 200 else 12
+            for ((arrow, body) in listOfNotNull(request?.let { "→" to it }, response?.let { "←" to it })) {
+                for (line in body.lineSequence().filter { it.isNotBlank() }.take(cap)) {
+                    Text("$arrow $line", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, maxLines = 2)
+                }
+            }
+            if (!expanded) Text("…", style = MaterialTheme.typography.labelSmall)
         }
     }
 }
