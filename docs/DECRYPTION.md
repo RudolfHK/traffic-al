@@ -87,11 +87,40 @@ For apps to accept the proxy's certificate you install the proxy's CA on your ph
   Flash the resulting `system-ca-magisk.zip` in the Magisk app and reboot; remove it there
   to undo. It only places one file you generated; it changes nothing else.
 
-### 3. A key logger on a rooted device
+### 3. A key logger on your own rooted device
 
-A root tool (e.g. a Frida script hooking the TLS library) can write an `SSLKEYLOGFILE` for
-other apps' sessions. Point it at the path above. This is the only way to read a
-closed-source app that does not pin — and pinned apps still stay opaque.
+On a rooted phone you can read the TLS keys an app exports itself, without a proxy or a CA,
+by hooking its TLS library. This repo ships a small Frida script for exactly that:
+
+```
+tools/keycapture/keylog.js       # hooks BoringSSL/OpenSSL SSL_CTX_set_keylog_callback
+tools/keycapture/capture.py      # runs it from your computer, writes keylog.txt
+```
+
+It does **not** weaken TLS, defeat pinning, or touch any app but the one you name — it only
+asks the app's own TLS library for the key-log lines it already knows how to emit (the same
+hook `SSLKEYLOGFILE` uses). On your computer:
+
+```
+pip install frida-tools
+# start frida-server on the rooted device (matching your frida version), then:
+python tools/keycapture/capture.py <package-name> keylog.txt
+```
+
+Use the app so it makes connections, press Ctrl-C, and copy the resulting `keylog.txt` to
+Traffic AL's key-log path with root:
+
+```
+adb push keylog.txt /data/local/tmp/keylog.txt
+adb shell su -c 'cp /data/local/tmp/keylog.txt \
+  /data/data/io.github.rudolfhk.traffical/files/tls/keylog.txt'
+```
+
+This is the only way to read a closed-source app that does not pin. Apps that strip these
+symbols or detect instrumentation won't yield keys this way, and **pinned apps still stay
+opaque** — for stripped or hardened apps, [friTap](https://github.com/fkie-cad/friTap) is a
+more capable, maintained tool that writes the same key-log format; point it at the same
+path. See `tools/keycapture/README.md` for details and limits.
 
 ## What you can and cannot see
 
