@@ -50,8 +50,13 @@ check(limited == lengths[-len(limited):], "limited recording is the tail of the 
 encrypted, encrypted_comments = read("recording-encrypted.pcapng", comments=True)
 check(expected["encryptedDamaged"] == 0 and encrypted == lengths and encrypted_comments == comments,
       f"encrypted recording: {len(encrypted)}/{packets} packets after decryption, same lengths and comments")
-ciphertext = b"".join(p.read_bytes() for p in sorted((out / "recordings-encrypted").rglob("*.enc")))
-check(b"traffic-al" not in ciphertext and b"uid=" not in ciphertext,
+segments = sorted((out / "recordings-encrypted").rglob("*.enc"))
+ciphertext = b"".join(p.read_bytes() for p in segments)
+# "traffic-al" (the 10-byte app name in every section header) is a cleartext marker that
+# won't collide; a plaintext segment would also start with the PCAPNG section-header magic.
+# A short needle like b"uid=" is avoided: 4 bytes appear by chance in megabytes of ciphertext.
+magic = b"\x0a\x0d\x0d\x0a"
+check(b"traffic-al" not in ciphertext and all(not p.read_bytes().startswith(magic) for p in segments),
       "encrypted segments contain no cleartext PCAPNG")
 
 cut, _ = read("recording-cut.pcapng")
