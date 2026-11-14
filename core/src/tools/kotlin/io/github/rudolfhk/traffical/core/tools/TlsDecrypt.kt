@@ -66,7 +66,7 @@ fun main(args: Array<String>) {
         println(String((s2c as ByteArray).copyOf(minOf(500, s2c.size)), Charsets.ISO_8859_1))
 
         // phase 12: the data-flow audit dissects the decrypted request and flags sensitive data.
-        val dissection = PlaintextDissector.dissect(c2s, s2c, IpProtocol.TCP)
+        val dissection = PlaintextDissector.dissect(c2s as ByteArray, s2c as ByteArray, IpProtocol.TCP)
         for (request in dissection.requests) {
             println("audit request: ${request.line}")
             for (exposure in SensitiveData.scan(request)) {
