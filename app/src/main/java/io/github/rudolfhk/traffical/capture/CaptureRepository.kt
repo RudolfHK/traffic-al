@@ -4,12 +4,16 @@ import android.content.Context
 import android.util.Log
 import androidx.annotation.StringRes
 import io.github.rudolfhk.traffical.core.analysis.DashboardData
+import io.github.rudolfhk.traffical.core.analysis.DataFlowAudit
 import io.github.rudolfhk.traffical.core.analysis.FlowPacket
 import io.github.rudolfhk.traffical.core.analysis.TimeRange
 import io.github.rudolfhk.traffical.core.analysis.TimelineSummary
 import io.github.rudolfhk.traffical.core.analysis.TrafficTimeline
+import io.github.rudolfhk.traffical.core.analysis.carriesHttp
 import io.github.rudolfhk.traffical.core.analysis.dashboard as buildDashboard
+import io.github.rudolfhk.traffical.core.analysis.dataFlowAudit as buildAudit
 import io.github.rudolfhk.traffical.core.analysis.packetsOf as flowPackets
+import io.github.rudolfhk.traffical.core.tls.TlsKeyLog
 import io.github.rudolfhk.traffical.core.capture.CaptureBatch
 import io.github.rudolfhk.traffical.core.capture.CaptureRecord
 import io.github.rudolfhk.traffical.core.capture.Direction
@@ -251,6 +255,27 @@ object CaptureRepository {
         }
         return buildDashboard(flows, summary, range, now) { enrichment?.destination(it) }
     }
+
+    /**
+     * The per-app data-flow audit (phase 12): what each app sends where, decrypted with the
+     * owner's key log where available, with the sensitive data found and a tally of what could
+     * not be read. The decryption runs over the in-memory packets off the capture thread, so
+     * call it on a background dispatcher; it re-reads the key log each time, so placing new
+     * keys is picked up on the next refresh.
+     */
+    fun dataFlowAudit(): DataFlowAudit {
+        val keyLog = TlsKeyLog.parse(TlsKeyStore.text())
+        val enrichment = EnrichmentStore.current
+        val (flows, snapshot) = synchronized(lock) { tracker.snapshot(MAX_CONNECTIONS_SHOWN) to packets.toList() }
+        return buildAudit(
+            flows = flows.filter { it.carriesHttp() },
+            read = { flow -> TlsPlaintext.read(flowPackets(flow, snapshot), flow, keyLog) },
+            destination = { flow -> enrichment?.destination(flow) },
+        )
+    }
+
+    /** Whether a TLS key log is in place, so the audit can say when nothing can be read for lack of keys. */
+    fun hasTlsKeys(): Boolean = !TlsKeyLog.parse(TlsKeyStore.text()).isEmpty
 
     fun appInfo(uid: Int): AppInfo = apps.appInfo(uid)
 

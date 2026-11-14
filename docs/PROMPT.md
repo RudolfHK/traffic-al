@@ -190,6 +190,33 @@ the honest limits must be loud in the UI: it needs root, it can disturb or crash
 apps, and pinned apps stay unreadable. 11a and 11b are verified in `core` and on the host;
 11c is verified by the owner on the phone.
 
+## Phase 12 (improved): automated, secure per-app data-flow audit
+
+The request: *"as a cybersecurity expert, decrypt and see what data is sent through which
+apps — professionally, automated, but secure."* Phases 8–11 made single connections readable
+on demand (open a connection, see its decrypted request and response). Phase 12 turns that
+into an **audit**: it runs the decryption across all traffic automatically and answers, per
+app, *what data is going where* — without the owner opening connections one at a time, and
+without relaxing any of the invariants. The constraint is unchanged: Traffic AL only reads
+what the owner has keys for; it never breaks, terminates, forges or MITMs TLS, and pinned
+apps stay opaque.
+
+| Part | Decision | Why |
+| --- | --- | --- |
+| 12a. Structured dissection | Parse the already-decrypted bytes into HTTP messages (HTTP/1.x fully; HTTP/2 frames and HTTP/3 stream data best-effort): method, authority/host, path, headers, content-type, and a bounded body preview. | A raw plaintext blob is not an audit. Structure is what lets the app say "app X POSTed *this* to host Y". Pure `core`, fully unit-tested — no new interception. |
+| 12b. Sensitive-data detection | A deterministic scanner over the decrypted text flags identifiers an audit cares about: email, phone, precise coordinates, device/advertising IDs, `Authorization`/token/JWT/cookie material, and card-like numbers — each finding typed and shown with the value truncated, never stored in full. | The cybersecurity question is "what *of mine* leaks, and to whom". Regex/field rules are deterministic and testable; no heuristics that could exfiltrate. Findings are evidence, not accusations (first-party auth to the app's own backend is normal). |
+| 12c. Per-app audit view | Aggregate across every connection with keys into app → destination → {data items, exposures}, alongside an honest tally of what could **not** be read (no keys, unsupported cipher, or pinned) so the view never implies "nothing sent" when it means "couldn't open". | "Which apps" is the top axis of the question. The unreadable tally keeps the audit honest about its own blind spots. Pure `core`. |
+| 12d. Automation | Decrypt in bulk over the live capture buffer and recordings on a background pass, and watch the key-log file so new keys are imported and the audit refreshed live — no per-connection taps, no manual re-import. | "Automated" means the owner enables keys once and the audit keeps itself current. App-side; the heavy lifting is the tested `core`. |
+| Secure handling | Decrypted content and the audit live in memory or the existing encrypted stores only (Tink / SQLCipher), under `FLAG_SECURE` and the app lock; nothing is written in the clear and nothing leaves the device. | "Secure" is a requirement on the tool itself: reading your plaintext must not become the weak point that spills it. |
+| Automatic MITM / bundled interception | Still not built | Unchanged from phase 11: pinning defeats it for the apps that matter, and terminating TLS is exactly the invariant this project refuses to cross. The owner's own keys (phase 8/11) remain the only source. |
+
+Impacts: 12a–12c are pure analysis over bytes the app already decrypts, so they change nothing
+about the privacy posture — they only organize what a key log already unlocks, and are verified
+in `core` and end-to-end on the host (the host test asserts the audit extracts the HTTP request
+and flags a planted secret). 12d is convenience and freshness, not new capability. The honest
+limits stay loud: no keys means no audit for that app, and pinned apps are reported as unreadable,
+not as clean.
+
 ## The prompt
 
 ```markdown
@@ -358,7 +385,9 @@ no Wi-Fi monitor mode, no capturing other devices.
   decryptor tested in core and on the host; phase 11 as in-app TLS 1.2 and QUIC/HTTP-3
   decryption, both verified in core against RFC vectors and end-to-end on the host, plus the
   root key-capture scripts in tools/keycapture, which are device-only and verified on the
-  phone). What remains is the on-device pass: every phase
+  phone; phase 12 as the automated per-app data-flow audit — an HPACK/HTTP dissector and a
+  sensitive-data scanner over the decrypted bytes, unit-tested in core and asserted end-to-end
+  on the host). What remains is the on-device pass: every phase
   is marked "needs on-device test", and the phone checklists in docs/VALIDATION.md and
   docs/PERFORMANCE.md are the way to clear it.
 - Decision taken for 8: Traffic AL embeds an owner-supplied TLS key log so Wireshark

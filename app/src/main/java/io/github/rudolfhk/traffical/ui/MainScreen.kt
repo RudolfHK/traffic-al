@@ -38,6 +38,7 @@ import io.github.rudolfhk.traffical.capture.RecordingView
 import io.github.rudolfhk.traffical.capture.TlsPlaintext
 import io.github.rudolfhk.traffical.core.analysis.ConnectionFilter
 import io.github.rudolfhk.traffical.core.analysis.DashboardData
+import io.github.rudolfhk.traffical.core.analysis.DataFlowAudit
 import io.github.rudolfhk.traffical.core.analysis.FlowPacket
 import io.github.rudolfhk.traffical.core.analysis.Format
 import io.github.rudolfhk.traffical.core.analysis.TimeRange
@@ -69,6 +70,9 @@ private const val DASHBOARD_REFRESH_MILLIS = 1_000L
 
 /** How often the recordings list is reread while visible (a running one grows). */
 private const val RECORDINGS_REFRESH_MILLIS = 2_000L
+
+/** How often the data-flow audit is recomputed while visible (heavier: it decrypts). */
+private const val AUDIT_REFRESH_MILLIS = 3_000L
 
 private val filterSaver: Saver<ConnectionFilter, Any> = listSaver<ConnectionFilter, Any?>(
     save = { listOf(it.text, it.timeRange.name, it.protocol, it.port, it.uid, it.attentionOnly) },
@@ -127,6 +131,7 @@ fun MainScreen(actions: MainActions) {
     var filter by rememberSaveable(stateSaver = filterSaver) { mutableStateOf(ConnectionFilter()) }
     var dnsQuery by rememberSaveable { mutableStateOf("") }
     var showRecordings by rememberSaveable { mutableStateOf(false) }
+    var showAudit by rememberSaveable { mutableStateOf(false) }
 
     // The open connection detail. The connection list only holds the most recent
     // connections, so the last known state is kept in case it drops out.
@@ -145,7 +150,8 @@ fun MainScreen(actions: MainActions) {
 
     BackHandler(enabled = detail != null) { detailId = null }
     BackHandler(enabled = detail == null && showRecordings) { showRecordings = false }
-    BackHandler(enabled = detail == null && !showRecordings && tab != Tab.DASHBOARD) { tab = Tab.DASHBOARD }
+    BackHandler(enabled = detail == null && !showRecordings && showAudit) { showAudit = false }
+    BackHandler(enabled = detail == null && !showRecordings && !showAudit && tab != Tab.DASHBOARD) { tab = Tab.DASHBOARD }
 
     val text = LocalUiText.current
     TrafficAlScaffold(
@@ -154,10 +160,12 @@ fun MainScreen(actions: MainActions) {
             tab = it
             detailId = null
             showRecordings = false
+            showAudit = false
         },
         title = when {
             detail != null -> detail.app.label
             showRecordings -> text.recordingsTitle
+            showAudit -> stringResource(R.string.audit_title)
             tab == Tab.CONNECTIONS -> text.tabConnections
             tab == Tab.DNS -> text.tabDns
             tab == Tab.SETTINGS -> text.tabSettings
@@ -166,6 +174,7 @@ fun MainScreen(actions: MainActions) {
         onBack = when {
             detail != null -> ({ detailId = null })
             showRecordings -> ({ showRecordings = false })
+            showAudit -> ({ showAudit = false })
             else -> null
         },
     ) { padding ->
@@ -222,6 +231,21 @@ fun MainScreen(actions: MainActions) {
                     modifier = modifier,
                 )
             }
+            showAudit -> {
+                var auditRefresh by remember { mutableIntStateOf(0) }
+                val audit = rememberAudit(auditRefresh)
+                var keyLogPresent by remember { mutableStateOf(false) }
+                LaunchedEffect(auditRefresh) {
+                    keyLogPresent = withContext(Dispatchers.IO) { CaptureRepository.hasTlsKeys() }
+                }
+                AuditScreen(
+                    audit = audit,
+                    appInfo = CaptureRepository::appInfo,
+                    keyLogPresent = keyLogPresent,
+                    onRefresh = { auditRefresh++ },
+                    modifier = modifier,
+                )
+            }
             tab == Tab.DASHBOARD -> {
                 val data = rememberDashboard(range)
                 DashboardScreen(
@@ -245,6 +269,7 @@ fun MainScreen(actions: MainActions) {
                             packetCount = packetCount,
                             actions = actions,
                             onShowRecordings = { showRecordings = true },
+                            onShowAudit = { showAudit = true },
                         )
                     },
                     modifier = modifier,
@@ -307,6 +332,26 @@ private fun rememberDashboard(range: TimeRange): DashboardData {
     return data.value
 }
 
+/**
+ * The data-flow audit, recomputed every few seconds while the screen is visible (and at once
+ * when [refreshKey] changes). It decrypts the buffered traffic with the owner's key log off
+ * the main thread; the previous result stays on screen while a new one is built.
+ */
+@Composable
+private fun rememberAudit(refreshKey: Int): DataFlowAudit? {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val data = remember { mutableStateOf<DataFlowAudit?>(null) }
+    LaunchedEffect(refreshKey, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                data.value = withContext(Dispatchers.Default) { CaptureRepository.dataFlowAudit() }
+                delay(AUDIT_REFRESH_MILLIS)
+            }
+        }
+    }
+    return data.value
+}
+
 /** The saved recordings, reread every few seconds while visible and when [reload] changes. */
 @Composable
 private fun rememberRecordings(reload: Int): List<RecordingItem>? {
@@ -332,6 +377,7 @@ private fun StatusCard(
     packetCount: Int,
     actions: MainActions,
     onShowRecordings: () -> Unit,
+    onShowAudit: () -> Unit,
 ) {
     var confirmClear by remember { mutableStateOf(false) }
     Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
@@ -375,6 +421,7 @@ private fun StatusCard(
                     Button(onClick = actions.start) { Text(stringResource(R.string.action_start)) }
                 }
                 OutlinedButton(onClick = onShowRecordings) { Text(stringResource(R.string.action_recordings)) }
+                OutlinedButton(onClick = onShowAudit) { Text(stringResource(R.string.action_audit)) }
                 TextButton(onClick = { confirmClear = true }, enabled = connectionCount > 0 || packetCount > 0) {
                     Text(stringResource(R.string.action_clear))
                 }

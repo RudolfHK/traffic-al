@@ -1,5 +1,7 @@
 package io.github.rudolfhk.traffical.core.tools
 
+import io.github.rudolfhk.traffical.core.analysis.PlaintextDissector
+import io.github.rudolfhk.traffical.core.analysis.SensitiveData
 import io.github.rudolfhk.traffical.core.capture.CaptureBatch
 import io.github.rudolfhk.traffical.core.capture.CaptureRecord
 import io.github.rudolfhk.traffical.core.capture.Direction
@@ -62,6 +64,15 @@ fun main(args: Array<String>) {
         println(String(c2s as ByteArray, Charsets.ISO_8859_1))
         println("server -> client (first 500 bytes):")
         println(String((s2c as ByteArray).copyOf(minOf(500, s2c.size)), Charsets.ISO_8859_1))
+
+        // phase 12: the data-flow audit dissects the decrypted request and flags sensitive data.
+        val dissection = PlaintextDissector.dissect(c2s, s2c, IpProtocol.TCP)
+        for (request in dissection.requests) {
+            println("audit request: ${request.line}")
+            for (exposure in SensitiveData.scan(request)) {
+                println("audit exposure: ${exposure.type.name} ${exposure.where} ${exposure.sample}")
+            }
+        }
     }
     System.err.println("decrypted $decryptedConnections TLS connection(s) on port $serverPort")
     if (decryptedConnections == 0) exitProcess(1)

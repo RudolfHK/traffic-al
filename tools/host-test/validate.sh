@@ -37,6 +37,16 @@ if [[ -s "$WORK/keylog.txt" ]]; then
     fi
   done
 
+  # phase 12: the data-flow audit dissects the decrypted request and flags the planted
+  # sensitive data (an email in the query and an auth token in the header).
+  for kind in EMAIL AUTH; do
+    if grep -aq "audit exposure: $kind" "$OUT/tls-decrypt.txt"; then
+      echo "OK: the audit flagged $kind in the decrypted request"
+    else
+      echo "FAIL: the audit did not flag $kind"; grep -a "audit " "$OUT/tls-decrypt.txt"; exit 1
+    fi
+  done
+
   # phase 11: the in-app QUIC decryptor recovers the HTTP/3 response from the same key log.
   "$HERE/../../gradlew" -q -p "$HERE/../../core" quicDecrypt \
     --args="$WORK/batches.bin $WORK/keylog.txt 4433" > "$OUT/quic-decrypt.txt" 2>/dev/null || true

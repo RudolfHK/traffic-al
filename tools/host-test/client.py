@@ -232,7 +232,13 @@ try:
         tls.keylog_filename = keylog
     with socket.create_connection((SERVER, 8443), timeout=5) as raw, \
             tls.wrap_socket(raw, server_hostname="tls.example.test") as s:
-        s.sendall(b"GET /small HTTP/1.0\r\nHost: tls.example.test\r\n\r\n")
+        # The query and header plant sensitive data so the phase-12 audit has something to
+        # flag in the decrypted request (the server strips the query before serving /small).
+        s.sendall(
+            b"GET /small?email=audit%40example.test HTTP/1.0\r\n"
+            b"Host: tls.example.test\r\n"
+            b"Authorization: Bearer audit-secret-7f3a9\r\n\r\n"
+        )
         body = b""
         while chunk := s.recv(1 << 16):
             body += chunk

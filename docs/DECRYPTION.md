@@ -43,6 +43,28 @@ and no Wireshark. It covers:
 Legacy TLS 1.2 CBC ciphers and QPACK header decoding are not handled, and pinned apps stay
 opaque.
 
+## The data-flow audit (phase 12)
+
+The connection detail shows one connection at a time. The **Audit** (a button on the
+dashboard) answers the cybersecurity question across *all* of your traffic at once: **which
+apps send what data where.** It decrypts every connection it has keys for — automatically, in
+the background, refreshing while it is open and re-reading your key log live — and groups the
+result per app:
+
+- each **destination** the app sent HTTP-bearing traffic to (host, country, tracker/company),
+- the **sensitive data** found in the decrypted requests — email, phone, precise location,
+  device and advertising IDs, `Authorization`/token/JWT/cookie material, card-like numbers —
+  each shown with the value truncated, never in full,
+- and an honest tally of what could **not** be read: connections that stayed encrypted
+  because there are no keys for them or the app pins its certificate.
+
+It reads HTTP/1.x, HTTP/2 (including HPACK-compressed headers) and HTTP/3 stream data, and it
+reads plaintext HTTP (port 80) with no keys at all. Findings are evidence, not accusations:
+an app sending your email or a token to its own backend is normal — the value is seeing
+*which* app sends *what* to *which* destination. Everything is decrypted and analysed on the
+device; nothing is written in the clear and nothing leaves the phone. Connections with no
+keys are reported as unreadable, never as clean.
+
 ## Getting the keys
 
 You need the TLS keys for the traffic you want to read. There are three ways, all under
@@ -136,3 +158,9 @@ like an app built with it), embeds the matching keys as a DSB with the same code
 uses (`core` `decryptCheck`), and checks that `tshark` decrypts the HTTPS request from the
 embedded keys alone (`validate_decrypt.py`). The key-log parsing, the DSB format and the
 client-random matching have unit tests in `core`.
+
+For phase 12, the host test's TLS request carries a planted email (in the query) and an auth
+token (in the header); the `tlsDecrypt` tool decrypts the session, dissects the request, and
+the audit's sensitive-data scan flags both, which `validate.sh` asserts. The HPACK decoder
+(RFC 7541 vectors), the HTTP/1/2/3 dissector, the sensitive-data rules and the per-app
+aggregator all have unit tests in `core`.
