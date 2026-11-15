@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -151,28 +152,33 @@ fun StatTile(label: String, value: String, detail: String?, modifier: Modifier =
     }
 }
 
-/** Colors of the two traffic directions in charts and bars. */
+/** Colors of the two traffic directions in charts and bars: the validated blue/orange series. */
 @Composable
-fun sentColor(): Color = MaterialTheme.colorScheme.primary
+fun sentColor(): Color = vizColor(0)
 
 @Composable
-fun receivedColor(): Color = MaterialTheme.colorScheme.tertiary
+fun receivedColor(): Color = vizColor(1)
 
-/** Area chart of sent and received bytes per interval. */
+/**
+ * Area chart of sent and received bytes per interval (phase 14). One y-axis (bytes per second);
+ * the peak rate labels the top and the baseline is zero. The x-axis runs left (start of the
+ * [range] window) to right (now).
+ */
 @Composable
-fun ThroughputChart(series: List<TrafficPoint>, modifier: Modifier = Modifier) {
+fun ThroughputChart(series: List<TrafficPoint>, range: TimeRange, modifier: Modifier = Modifier) {
+    val text = LocalUiText.current
     val out = sentColor()
     val incoming = receivedColor()
     val grid = MaterialTheme.colorScheme.outlineVariant
+    val axis = MaterialTheme.colorScheme.onSurfaceVariant
     val peak = series.maxOfOrNull { maxOf(it.bytesOut, it.bytesIn) } ?: 0L
     val stepSeconds = if (series.size >= 2) (series[1].startMillis - series[0].startMillis) / 1000 else 1L
 
-    // The peak rate labels the top grid line; the plot is scaled so the peak touches it.
     Column(modifier) {
         Text(
             text = Format.rate(peak / maxOf(1L, stepSeconds)),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = axis,
             modifier = Modifier.align(Alignment.End),
         )
         Canvas(Modifier.fillMaxWidth().weight(1f)) {
@@ -202,6 +208,11 @@ fun ThroughputChart(series: List<TrafficPoint>, modifier: Modifier = Modifier) {
             }
             area(series.map { it.bytesIn }, incoming)
             area(series.map { it.bytesOut }, out)
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 2.dp)) {
+            Text(rangeLabel(range), style = MaterialTheme.typography.labelSmall, color = axis)
+            Spacer(Modifier.weight(1f))
+            Text(text.chartNow, style = MaterialTheme.typography.labelSmall, color = axis)
         }
     }
 }

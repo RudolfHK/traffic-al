@@ -152,6 +152,8 @@ data class DashboardData(
     val attention: Int,
     /** Tracking companies, most connections first. */
     val trackers: List<TrackerTraffic> = emptyList(),
+    /** Traffic by application protocol, largest first, tail folded into "Other" (phase 14). */
+    val protocols: List<TrafficShare> = emptyList(),
 ) {
     companion object {
         val EMPTY = DashboardData(TimeRange.FIVE_MINUTES, TrafficTotals(), TrafficTotals(), emptyList(), emptyList(), 0, 0)
@@ -245,6 +247,7 @@ fun dashboard(
                 )
             }
             .sortedWith(compareByDescending<TrackerTraffic> { it.connections }.thenBy { it.company }),
+        protocols = protocolMix(inRange),
     )
 }
 

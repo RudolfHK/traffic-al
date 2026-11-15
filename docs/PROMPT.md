@@ -242,6 +242,32 @@ what the app already decrypts. The stats are verified in `core`; the proxy plumb
 checked by the app build, and the end-to-end MITM is verified by the owner with their own
 mitmproxy.
 
+## Phase 14 (improved): scientific, blue/orange data visualizations
+
+The request: *"add more professional visualizations for the connections and so on; make it
+scientific, with explanations and hints for the data visualizations; keep a blueish dark-orange
+design palette."* Improved into a concrete, testable brief: the charts are not decoration — each
+one encodes a real aggregate, carries a one-line statement of **what it shows and how to read
+it**, and an expandable **hint** with the caveat a cybersecurity reader needs. The palette is
+not chosen by taste: it is run through the data-viz validator so the series stay distinguishable
+for colour-blind readers in both light and dark mode.
+
+| Part | Decision | Why |
+| --- | --- | --- |
+| 14a. A validated chart palette | A fixed **blue-first, dark-orange-second** categorical palette (the data-viz reference ramps), with its own steps for the light and dark surfaces, re-validated against the app's real surfaces with `scripts/validate_palette.js`. Blue = sent/readable, orange = received/encrypted, held consistent across every chart. | "Blueish dark-orange" made rigorous: the two leading hues are blue and orange, and the ordering passes every CVD and normal-vision gate in both modes rather than being eyeballed. One palette, used everywhere, so a colour means the same thing on every screen. |
+| 14b. A chart card with explanation + hint | Every chart sits in a `ChartCard`: title, an always-visible one-line caption (what it shows / how to read it), a tap-to-reveal hint (the caveat), a legend, and the plot. | The "scientific, with explanations and hints" requirement, made a reusable component so no chart ships without its reading instructions and legend (the data-viz accessibility pass: a legend for ≥2 series, text in ink tokens, direct value labels as the relief for the light-surface contrast warn). |
+| 14c. Throughput, upgraded | The sent/received area chart gains a zero baseline and peak-rate axis label, a time-span x-axis (window → now), the blue/orange series colours, and its caption/hint. | One y-axis (bytes/s), two series — the canonical two-series time chart, now self-explaining and on the validated palette, with no second axis (the data-viz "never dual-axis" rule). |
+| 14d. Protocol mix (new) | A 100%-stacked **distribution bar** of traffic by protocol (TLS, QUIC, HTTP, DNS, …), largest first, the tail folded into "Other", with a value legend (share %, bytes, connections). Pure-`core` `protocolMix`, unit-tested; shown on the dashboard and as a header over the filtered connection list. | Answers "what *kind* of traffic is this, and how much of it" at a glance — the connections visualization the request asks for. The categorical cap + "Other" fold is the data-viz rule for staying inside the validated slots instead of inventing hues. |
+| 14e. Decryptability, as a chart | The phase-13 readable-vs-encrypted breakdown gets the same distribution bar (blue readable / orange encrypted) plus its caption and hint, above the existing per-app list. | Makes the headline number — how much of your traffic you can actually read — a picture, consistent with the rest. |
+| A charting dependency (Vico/MPAndroidChart) | Not added | Two series over time and a few stacked bars are a handful of `Canvas` primitives; a dependency would have to work in both the app and the Compose-Desktop preview, for charts this simple (the same call taken in phase 4). |
+
+Impacts: all of 14a–14e are presentation over aggregates the app already computes; the one new
+piece of logic, `protocolMix`, is pure `core` and unit-tested, and the new `protocols` field on
+`DashboardData` defaults to empty so nothing else changes. The charts live in the shared
+`ui/common` screens, so the Compose-Desktop preview renders them in CI (light and dark) and the
+screenshots are the visual check; the palette is checked by the validator, documented in
+docs/VISUALIZATION.md. No capture, decryption, or privacy behaviour changes.
+
 ## The prompt
 
 ```markdown
@@ -414,7 +440,10 @@ no Wi-Fi monitor mode, no capturing other devices.
   sensitive-data scanner over the decrypted bytes, unit-tested in core and asserted end-to-end
   on the host; phase 13 as the mitmproxy MITM integration (an in-VPN HTTP proxy that routes the
   owner's apps to their own mitmproxy) and the readable-vs-undecryptable stats, the stats
-  unit-tested in core). What remains is the on-device pass: every phase
+  unit-tested in core; phase 14 as the scientific data visualizations — a validated blue/orange
+  chart palette, a reusable chart card with caption and hint, an upgraded throughput chart and a
+  pure-core protocol-mix distribution, rendered light and dark by the preview tool in CI and
+  documented in docs/VISUALIZATION.md). What remains is the on-device pass: every phase
   is marked "needs on-device test", and the phone checklists in docs/VALIDATION.md and
   docs/PERFORMANCE.md are the way to clear it.
 - Decision taken for 8: Traffic AL embeds an owner-supplied TLS key log so Wireshark

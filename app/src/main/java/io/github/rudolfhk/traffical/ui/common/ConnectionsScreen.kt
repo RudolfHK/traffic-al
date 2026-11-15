@@ -40,6 +40,7 @@ import io.github.rudolfhk.traffical.core.analysis.FlowFlag
 import io.github.rudolfhk.traffical.core.analysis.Format
 import io.github.rudolfhk.traffical.core.analysis.flags
 import io.github.rudolfhk.traffical.core.analysis.protocolLabel
+import io.github.rudolfhk.traffical.core.analysis.protocolMix
 import io.github.rudolfhk.traffical.core.enrichment.Destination
 import io.github.rudolfhk.traffical.model.Connection
 import java.time.Instant
@@ -66,6 +67,8 @@ fun ConnectionsScreen(
     val shown = remember(connections, filter, nowMicros) {
         connections.filter { filter.matches(it.flow, it.app.label, it.app.packageName, nowMicros, it.destination) }
     }
+    // Protocol mix of exactly what is shown, so it tracks the search and filters.
+    val protocolShares = remember(shown) { protocolMix(shown.map { it.flow }) }
     // The most frequent protocols become quick filters.
     val protocols = remember(connections) {
         connections.groupingBy { it.flow.protocolLabel }.eachCount().entries
@@ -138,6 +141,18 @@ fun ConnectionsScreen(
             )
         }
         LazyColumn(Modifier.fillMaxSize()) {
+            if (protocolShares.size >= 2) {
+                item {
+                    ChartCard(
+                        title = text.chartProtocolsInView,
+                        caption = text.chartProtocolsViewCaption,
+                        hint = text.chartProtocolsHint,
+                        modifier = Modifier.padding(16.dp),
+                    ) {
+                        DistributionChart(protocolShares, weightByBytes = false)
+                    }
+                }
+            }
             items(shown, key = { it.flow.id }) { connection ->
                 ConnectionRow(connection, onClick = { onConnectionClick(connection) })
                 Divider()

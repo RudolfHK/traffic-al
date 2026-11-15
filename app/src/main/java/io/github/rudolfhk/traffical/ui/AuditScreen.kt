@@ -37,8 +37,11 @@ import io.github.rudolfhk.traffical.core.analysis.DataFlowAudit
 import io.github.rudolfhk.traffical.core.analysis.DecryptabilityStats
 import io.github.rudolfhk.traffical.core.analysis.Exposure
 import io.github.rudolfhk.traffical.core.analysis.Format
+import io.github.rudolfhk.traffical.core.analysis.TrafficShare
 import io.github.rudolfhk.traffical.model.AppInfo
 import io.github.rudolfhk.traffical.model.AppSettings
+import io.github.rudolfhk.traffical.ui.common.ChartCard
+import io.github.rudolfhk.traffical.ui.common.DistributionChart
 import io.github.rudolfhk.traffical.ui.common.LabelBadge
 import kotlin.math.roundToInt
 
@@ -154,41 +157,49 @@ private fun MitmProxyCard(settings: AppSettings, onChange: ((AppSettings) -> App
     }
 }
 
-/** The readable-vs-undecryptable breakdown (phase 13). */
+/**
+ * The readable-vs-undecryptable breakdown (phase 13), as a distribution chart (phase 14): the
+ * headline share and bytes are read off the chart's legend; the app counts and the most opaque
+ * apps are listed below it.
+ */
 @Composable
 private fun DecryptabilityCard(stats: DecryptabilityStats, appInfo: (Int) -> AppInfo) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(stringResource(R.string.audit_stats_title), style = MaterialTheme.typography.titleSmall)
-            Text(
-                stringResource(R.string.audit_stats_readable_pct, (stats.readableFraction * 100).roundToInt()),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                stringResource(R.string.audit_stats_bytes, Format.bytes(stats.readableBytes), Format.bytes(stats.encryptedBytes)),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                stringResource(R.string.audit_stats_apps, stats.fullyReadableApps, stats.fullyEncryptedApps),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            // The most opaque apps, so it is obvious which traffic can't be read.
-            val opaque = stats.apps.filter { it.encryptedBytes > 0 }.take(5)
-            if (opaque.isNotEmpty()) {
-                HorizontalDivider(Modifier.padding(vertical = 2.dp))
-                for (app in opaque) {
-                    Text(
-                        stringResource(
-                            R.string.audit_stats_app_row,
-                            appInfo(app.uid).label,
-                            (app.readableFraction * 100).roundToInt(),
-                            Format.bytes(app.encryptedBytes),
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+    // bytesIn carries each category's total; the distribution only needs the sum.
+    val shares = listOf(
+        TrafficShare(
+            label = stringResource(R.string.audit_stats_readable),
+            bytesOut = 0, bytesIn = stats.readableBytes, connections = stats.readableConnections,
+        ),
+        TrafficShare(
+            label = stringResource(R.string.audit_stats_encrypted),
+            bytesOut = 0, bytesIn = stats.encryptedBytes, connections = stats.encryptedConnections,
+        ),
+    )
+    ChartCard(
+        title = stringResource(R.string.audit_stats_title),
+        caption = stringResource(R.string.audit_stats_caption),
+        hint = stringResource(R.string.audit_stats_hint),
+    ) {
+        DistributionChart(shares)
+        Text(
+            stringResource(R.string.audit_stats_apps, stats.fullyReadableApps, stats.fullyEncryptedApps),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // The most opaque apps, so it is obvious which traffic can't be read.
+        val opaque = stats.apps.filter { it.encryptedBytes > 0 }.take(5)
+        if (opaque.isNotEmpty()) {
+            HorizontalDivider(Modifier.padding(vertical = 2.dp))
+            for (app in opaque) {
+                Text(
+                    stringResource(
+                        R.string.audit_stats_app_row,
+                        appInfo(app.uid).label,
+                        (app.readableFraction * 100).roundToInt(),
+                        Format.bytes(app.encryptedBytes),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }

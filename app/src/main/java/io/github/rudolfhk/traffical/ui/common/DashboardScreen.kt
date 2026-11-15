@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -94,19 +93,25 @@ fun DashboardScreen(
             }
         }
         item {
-            Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
-                Column(Modifier.padding(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text.chartThroughput, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                        Text(text.statSent, style = MaterialTheme.typography.labelSmall, color = sentColor())
-                        Text(
-                            text = text.statReceived,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = receivedColor(),
-                            modifier = Modifier.padding(start = 8.dp),
-                        )
-                    }
-                    ThroughputChart(data.series, Modifier.padding(top = 8.dp).fillMaxWidth().height(120.dp))
+            ChartCard(
+                title = text.chartThroughput,
+                caption = text.chartThroughputCaption,
+                hint = text.chartThroughputHint,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            ) {
+                ThroughputChart(data.series, data.range, Modifier.fillMaxWidth().height(120.dp))
+                LegendRow(listOf(text.statSent to sentColor(), text.statReceived to receivedColor()))
+            }
+        }
+        if (data.protocols.isNotEmpty()) {
+            item {
+                ChartCard(
+                    title = text.chartProtocols,
+                    caption = text.chartProtocolsCaption,
+                    hint = text.chartProtocolsHint,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                ) {
+                    DistributionChart(data.protocols)
                 }
             }
         }

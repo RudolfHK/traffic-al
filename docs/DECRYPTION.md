@@ -68,7 +68,9 @@ keys are reported as unreadable, never as clean.
 The audit also shows a **Decryptability** breakdown (phase 13): overall and per app, how much
 of your web traffic (connections and bytes) is readable versus encrypted and impossible to
 decrypt (no keys, or the app pins), with the most opaque apps listed first. It is the honest
-answer to "what of mine can I actually read, and what stays opaque".
+answer to "what of mine can I actually read, and what stays opaque". Phase 14 draws it as a
+blue/orange distribution bar with a one-line explanation and a tap-to-reveal hint; see
+docs/VISUALIZATION.md for the chart palette and how it is validated.
 
 ## MITM with mitmproxy (phase 13)
 
