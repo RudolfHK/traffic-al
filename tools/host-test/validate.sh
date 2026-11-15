@@ -11,11 +11,18 @@ WORK=$1
 OUT=${2:-$WORK}
 mkdir -p "$OUT"
 
+# The Gradle daemon writes these outputs with the runner's umask, which on the current CI
+# image is restrictive; tshark reads capture files through a privilege-dropped helper and
+# then cannot open them. Make everything in the output dir world-readable before each read.
+readable() { chmod -R a+rX "$OUT" 2>/dev/null || true; }
+
 "$HERE/../../gradlew" -q -p "$HERE/../../core" captureReport \
   --args="$WORK/batches.bin $OUT/capture.pcapng $OUT/flows.json"
+readable
 python3 "$HERE/validate_flows.py" "$OUT/capture.pcapng" "$OUT/flows.json"
 
 "$HERE/../../gradlew" -q -p "$HERE/../../core" exportCheck --args="$WORK/batches.bin $OUT"
+readable
 python3 "$HERE/validate_export.py" "$OUT"
 
 # phase 8: the TLS leg's session keys, embedded as a PCAPNG Decryption Secrets Block,
@@ -23,6 +30,7 @@ python3 "$HERE/validate_export.py" "$OUT"
 if [[ -s "$WORK/keylog.txt" ]]; then
   "$HERE/../../gradlew" -q -p "$HERE/../../core" decryptCheck \
     --args="$WORK/batches.bin $WORK/keylog.txt $OUT/decrypted.pcapng"
+  readable
   python3 "$HERE/validate_decrypt.py" "$OUT/decrypted.pcapng"
 
   # phase 10: the in-app TLS 1.3 decryptor recovers the HTTP from the same key log.
