@@ -420,11 +420,14 @@ private fun StatusCard(
                 } else {
                     Button(onClick = actions.start) { Text(stringResource(R.string.action_start)) }
                 }
-                OutlinedButton(onClick = onShowRecordings) { Text(stringResource(R.string.action_recordings)) }
-                OutlinedButton(onClick = onShowAudit) { Text(stringResource(R.string.action_audit)) }
                 TextButton(onClick = { confirmClear = true }, enabled = connectionCount > 0 || packetCount > 0) {
                     Text(stringResource(R.string.action_clear))
                 }
+            }
+            // A second row so all actions stay on screen on a narrow phone.
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onShowRecordings) { Text(stringResource(R.string.action_recordings)) }
+                OutlinedButton(onClick = onShowAudit) { Text(stringResource(R.string.action_audit)) }
             }
         }
     }

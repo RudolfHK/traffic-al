@@ -28,10 +28,21 @@ CONV = re.compile(
     r"^(\S+):(\d+)\s+<->\s+(\S+):(\d+)\s+"
     r"(\d+) ([\d,]+) (bytes|kB|MB|GB)\s+(\d+) ([\d,]+) (bytes|kB|MB|GB)\s+"
 )
-tshark = subprocess.run(
-    ["tshark", "-r", pcap, "-q", "-z", "conv,tcp", "-z", "conv,udp"],
-    capture_output=True, text=True, check=True,
-).stdout
+# "-n" disables name resolution (addresses stay as IP:port, which the regex below needs).
+# Newer tshark (Wireshark 4.4+) can exit non-zero when a captured packet trips a dissector
+# even though it still prints the conversation tables, so we don't use check=True: we fail
+# only when no conversations came back, and always surface tshark's stderr for diagnosis.
+result = subprocess.run(
+    ["tshark", "-n", "-r", pcap, "-q", "-z", "conv,tcp", "-z", "conv,udp"],
+    capture_output=True, text=True,
+)
+tshark = result.stdout
+if result.returncode != 0:
+    tail = "\n".join((result.stderr or "").strip().splitlines()[-8:])
+    if "Conversations" not in tshark:
+        sys.exit(f"tshark failed (exit {result.returncode}):\n{tail}")
+    print(f"warning: tshark exited {result.returncode} but produced conversations; "
+          f"continuing.\n{tail}")
 
 conversations = {}
 proto = None
