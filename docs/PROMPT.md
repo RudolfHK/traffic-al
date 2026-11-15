@@ -217,6 +217,31 @@ and flags a planted secret). 12d is convenience and freshness, not new capabilit
 limits stay loud: no keys means no audit for that app, and pinned apps are reported as unreadable,
 not as clean.
 
+## Phase 13 (improved): MITM via mitmproxy, and a decryptability breakdown
+
+The request: *"as a cybersecurity task, see other apps' sent/received data via MITM, and add
+stats on what can be read and what is impossible to decrypt."* This deliberately crosses the
+project's standing rule that Traffic AL never terminates or forges TLS — the owner's call, on
+their own device and their own apps. The decision, taken with the owner: do **not** build an
+in-app TLS-terminating proxy (a large, device-only reimplementation of mitmproxy that pinning
+defeats for the apps that matter). Integrate the mature tool instead — route the phone's apps
+through the owner's own mitmproxy and let the app's existing key-log → audit pipeline show the
+decrypted data.
+
+| Part | Decision | Why |
+| --- | --- | --- |
+| 13a. MITM via mitmproxy | A proxy setting routes the capture's app traffic to the owner's mitmproxy with `VpnService.setHttpProxy` (API 29, the target device). The owner installs the proxy's CA with the phase-8 Magisk system-CA script and points mitmproxy's `SSLKEYLOGFILE` at Traffic AL's key-log path, so the captured, re-encrypted TLS decrypts in the audit. | Reuses the proven, pinning-aware tool and the app's existing decryption; no in-app TLS termination and no change to the delicate native forwarding path. Honest limits: only apps that honor the VPN HTTP proxy are routed; pinned apps reject the CA; QUIC/HTTP-3 is not proxied. |
+| 13b. Decryptability stats | A breakdown — overall and per app — of how much traffic (connections and bytes) is **readable** (plaintext or decrypted) versus **encrypted and undecryptable** (no keys, or pinned). | Answers "what of mine can I actually read, and what stays opaque", and makes the MITM measurable: apps routed through mitmproxy move from undecryptable to readable; pinned apps stay opaque. Pure `core`. |
+| In-app TLS-terminating MITM proxy | Not built | A large, device-only build that re-encrypts the owner's traffic inside the app and still can't read pinned apps or QUIC; mitmproxy does it better. |
+
+Impacts: 13a adds no new decryption capability of its own — it routes traffic to a tool the
+owner runs and reads it back through the existing owner-key pipeline, so the privacy posture
+(owner-supplied keys, nothing leaves the device, pinned apps opaque) is unchanged, and the VPN
+proxy only applies while the owner enables it and names their proxy. 13b is pure analysis over
+what the app already decrypts. The stats are verified in `core`; the proxy plumbing is VPN code
+checked by the app build, and the end-to-end MITM is verified by the owner with their own
+mitmproxy.
+
 ## The prompt
 
 ```markdown
@@ -387,7 +412,9 @@ no Wi-Fi monitor mode, no capturing other devices.
   root key-capture scripts in tools/keycapture, which are device-only and verified on the
   phone; phase 12 as the automated per-app data-flow audit — an HPACK/HTTP dissector and a
   sensitive-data scanner over the decrypted bytes, unit-tested in core and asserted end-to-end
-  on the host). What remains is the on-device pass: every phase
+  on the host; phase 13 as the mitmproxy MITM integration (an in-VPN HTTP proxy that routes the
+  owner's apps to their own mitmproxy) and the readable-vs-undecryptable stats, the stats
+  unit-tested in core). What remains is the on-device pass: every phase
   is marked "needs on-device test", and the phone checklists in docs/VALIDATION.md and
   docs/PERFORMANCE.md are the way to clear it.
 - Decision taken for 8: Traffic AL embeds an owner-supplied TLS key log so Wireshark

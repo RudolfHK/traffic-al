@@ -9,6 +9,7 @@ import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
+import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
@@ -153,7 +154,17 @@ class CaptureVpnService : VpnService() {
             .addDisallowedApplication(packageName)
             .setBlocking(true)
             .setConfigureIntent(openAppIntent())
-            .apply { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false) }
+            .apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false)
+                // Route proxy-aware apps through the owner's mitmproxy for MITM decryption
+                // (phase 13). setHttpProxy needs API 29 (the target device); apps that honor
+                // the VPN HTTP proxy go through mitmproxy, the rest are unaffected.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    SettingsStore.settings.value.mitmProxy?.let { (host, port) ->
+                        setHttpProxy(ProxyInfo.buildDirectProxy(host, port))
+                    }
+                }
+            }
             .establish()
     } catch (e: Exception) {
         Log.e(TAG, "establish() failed", e)

@@ -38,7 +38,6 @@ import io.github.rudolfhk.traffical.capture.RecordingView
 import io.github.rudolfhk.traffical.capture.TlsPlaintext
 import io.github.rudolfhk.traffical.core.analysis.ConnectionFilter
 import io.github.rudolfhk.traffical.core.analysis.DashboardData
-import io.github.rudolfhk.traffical.core.analysis.DataFlowAudit
 import io.github.rudolfhk.traffical.core.analysis.FlowPacket
 import io.github.rudolfhk.traffical.core.analysis.Format
 import io.github.rudolfhk.traffical.core.analysis.TimeRange
@@ -233,16 +232,19 @@ fun MainScreen(actions: MainActions) {
             }
             showAudit -> {
                 var auditRefresh by remember { mutableIntStateOf(0) }
-                val audit = rememberAudit(auditRefresh)
+                val report = rememberAudit(auditRefresh)
                 var keyLogPresent by remember { mutableStateOf(false) }
                 LaunchedEffect(auditRefresh) {
                     keyLogPresent = withContext(Dispatchers.IO) { CaptureRepository.hasTlsKeys() }
                 }
                 AuditScreen(
-                    audit = audit,
+                    audit = report?.audit,
+                    stats = report?.stats,
+                    settings = settings,
                     appInfo = CaptureRepository::appInfo,
                     keyLogPresent = keyLogPresent,
                     onRefresh = { auditRefresh++ },
+                    onMitmChange = SettingsStore::update,
                     modifier = modifier,
                 )
             }
@@ -338,13 +340,13 @@ private fun rememberDashboard(range: TimeRange): DashboardData {
  * the main thread; the previous result stays on screen while a new one is built.
  */
 @Composable
-private fun rememberAudit(refreshKey: Int): DataFlowAudit? {
+private fun rememberAudit(refreshKey: Int): CaptureRepository.AuditReport? {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val data = remember { mutableStateOf<DataFlowAudit?>(null) }
+    val data = remember { mutableStateOf<CaptureRepository.AuditReport?>(null) }
     LaunchedEffect(refreshKey, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
-                data.value = withContext(Dispatchers.Default) { CaptureRepository.dataFlowAudit() }
+                data.value = withContext(Dispatchers.Default) { CaptureRepository.auditReport() }
                 delay(AUDIT_REFRESH_MILLIS)
             }
         }

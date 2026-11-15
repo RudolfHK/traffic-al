@@ -16,6 +16,9 @@ object SettingsStore {
     private const val RECORD = "record_to_storage"
     private const val STORAGE_LIMIT_MB = "storage_limit_mb"
     private const val EMBED_TLS_KEYS = "embed_tls_keys"
+    private const val MITM_ENABLED = "mitm_proxy_enabled"
+    private const val MITM_HOST = "mitm_proxy_host"
+    private const val MITM_PORT = "mitm_proxy_port"
     private const val CAPTURE_WANTED = "capture_wanted"
 
     private lateinit var prefs: SharedPreferences
@@ -38,6 +41,9 @@ object SettingsStore {
             .putBoolean(RECORD, updated.recordToStorage)
             .putInt(STORAGE_LIMIT_MB, updated.storageLimitMb)
             .putBoolean(EMBED_TLS_KEYS, updated.embedTlsKeys)
+            .putBoolean(MITM_ENABLED, updated.mitmProxyEnabled)
+            .putString(MITM_HOST, updated.mitmProxyHost)
+            .putInt(MITM_PORT, updated.mitmProxyPort)
             .apply()
         _settings.value = updated
     }
@@ -60,6 +66,9 @@ object SettingsStore {
             recordToStorage = prefs.getBoolean(RECORD, defaults.recordToStorage),
             storageLimitMb = prefs.getInt(STORAGE_LIMIT_MB, defaults.storageLimitMb),
             embedTlsKeys = prefs.getBoolean(EMBED_TLS_KEYS, defaults.embedTlsKeys),
+            mitmProxyEnabled = prefs.getBoolean(MITM_ENABLED, defaults.mitmProxyEnabled),
+            mitmProxyHost = prefs.getString(MITM_HOST, null) ?: defaults.mitmProxyHost,
+            mitmProxyPort = prefs.getInt(MITM_PORT, defaults.mitmProxyPort),
         )
     }
 

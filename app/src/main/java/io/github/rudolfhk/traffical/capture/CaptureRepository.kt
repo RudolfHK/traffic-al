@@ -5,13 +5,16 @@ import android.util.Log
 import androidx.annotation.StringRes
 import io.github.rudolfhk.traffical.core.analysis.DashboardData
 import io.github.rudolfhk.traffical.core.analysis.DataFlowAudit
+import io.github.rudolfhk.traffical.core.analysis.DecryptabilityStats
 import io.github.rudolfhk.traffical.core.analysis.FlowPacket
+import io.github.rudolfhk.traffical.core.analysis.FlowReadResult
 import io.github.rudolfhk.traffical.core.analysis.TimeRange
 import io.github.rudolfhk.traffical.core.analysis.TimelineSummary
 import io.github.rudolfhk.traffical.core.analysis.TrafficTimeline
 import io.github.rudolfhk.traffical.core.analysis.carriesHttp
 import io.github.rudolfhk.traffical.core.analysis.dashboard as buildDashboard
 import io.github.rudolfhk.traffical.core.analysis.dataFlowAudit as buildAudit
+import io.github.rudolfhk.traffical.core.analysis.decryptabilityStats as buildStats
 import io.github.rudolfhk.traffical.core.analysis.packetsOf as flowPackets
 import io.github.rudolfhk.traffical.core.tls.TlsKeyLog
 import io.github.rudolfhk.traffical.core.capture.CaptureBatch
@@ -263,14 +266,21 @@ object CaptureRepository {
      * call it on a background dispatcher; it re-reads the key log each time, so placing new
      * keys is picked up on the next refresh.
      */
-    fun dataFlowAudit(): DataFlowAudit {
+    /** The data-flow audit and the decryptability breakdown (phase 13), from one decryption pass. */
+    data class AuditReport(val audit: DataFlowAudit, val stats: DecryptabilityStats)
+
+    fun auditReport(): AuditReport {
         val keyLog = TlsKeyLog.parse(TlsKeyStore.text())
         val enrichment = EnrichmentStore.current
         val (flows, snapshot) = synchronized(lock) { tracker.snapshot(MAX_CONNECTIONS_SHOWN) to packets.toList() }
-        return buildAudit(
-            flows = flows.filter { it.carriesHttp() },
-            read = { flow -> TlsPlaintext.read(flowPackets(flow, snapshot), flow, keyLog) },
-            destination = { flow -> enrichment?.destination(flow) },
+        val httpFlows = flows.filter { it.carriesHttp() }
+        // Decrypt each connection once; both the audit and the stats read the same results.
+        val results = HashMap<Long, FlowReadResult>(httpFlows.size)
+        for (flow in httpFlows) results[flow.id] = TlsPlaintext.read(flowPackets(flow, snapshot), flow, keyLog)
+        val read = { flow: FlowInfo -> results[flow.id] ?: FlowReadResult.NOT_APPLICABLE }
+        return AuditReport(
+            audit = buildAudit(httpFlows, read = read, destination = { flow -> enrichment?.destination(flow) }),
+            stats = buildStats(httpFlows, read = read),
         )
     }
 

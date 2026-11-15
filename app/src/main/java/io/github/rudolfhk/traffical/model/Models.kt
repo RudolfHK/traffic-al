@@ -36,8 +36,17 @@ data class AppSettings(
     val storageLimitMb: Int = 1000,
     /** Embed the owner-supplied TLS key log into exports so Wireshark can decrypt them. */
     val embedTlsKeys: Boolean = false,
+    /** Route the capture's app traffic through the owner's mitmproxy for MITM decryption (phase 13). */
+    val mitmProxyEnabled: Boolean = false,
+    val mitmProxyHost: String = "",
+    val mitmProxyPort: Int = 8080,
 ) {
     val storageLimitBytes: Long get() = storageLimitMb * 1_000_000L
+
+    /** The configured upstream MITM proxy (host, port), or null when it is off or incomplete. */
+    val mitmProxy: Pair<String, Int>?
+        get() = mitmProxyHost.trim().takeIf { mitmProxyEnabled && it.isNotEmpty() && mitmProxyPort in 1..65535 }
+            ?.let { it to mitmProxyPort }
 
     companion object {
         val STORAGE_LIMITS_MB = listOf(250, 1000, 4000)

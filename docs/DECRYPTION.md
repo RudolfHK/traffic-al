@@ -65,6 +65,33 @@ an app sending your email or a token to its own backend is normal — the value 
 device; nothing is written in the clear and nothing leaves the phone. Connections with no
 keys are reported as unreadable, never as clean.
 
+The audit also shows a **Decryptability** breakdown (phase 13): overall and per app, how much
+of your web traffic (connections and bytes) is readable versus encrypted and impossible to
+decrypt (no keys, or the app pins), with the most opaque apps listed first. It is the honest
+answer to "what of mine can I actually read, and what stays opaque".
+
+## MITM with mitmproxy (phase 13)
+
+To read apps you have no other key for, you can route them through your own
+[mitmproxy](https://mitmproxy.org) and let the audit show the result. This terminates TLS at a
+proxy *you* run — a deliberate exception to Traffic AL's "never terminate TLS" rule, for your
+own device and your own apps. It only reaches apps that honor the VPN's HTTP proxy and that
+trust your CA; **pinned apps stay opaque, and QUIC/HTTP-3 is not proxied.**
+
+1. Run mitmproxy on your computer (same network as the phone) with a key log:
+   `mitmproxy` (then set `tls_keylog_file`), or `SSLKEYLOGFILE=keylog.txt mitmproxy`.
+2. In Traffic AL's **Audit** screen, turn on **MitM via mitmproxy** and enter your computer's
+   IP and mitmproxy's port. Start (or restart) the capture: the VPN sets that HTTP proxy
+   (`VpnService.setHttpProxy`, Android 10+), so proxy-aware apps go through mitmproxy.
+3. Install mitmproxy's CA so apps accept it: `tools/decryption/system-ca.sh <mitmproxy-ca.pem>`
+   (Magisk, system store) or a user certificate for apps that accept user CAs.
+4. Copy mitmproxy's key log to Traffic AL's key-log path. Traffic AL captures the
+   phone↔mitmproxy TLS and decrypts it with those keys, so the real request and response show
+   up in the audit — and the Decryptability stats move those apps from opaque to readable.
+
+Nothing here reaches the network on Traffic AL's behalf; it routes to the proxy you run and
+reads the result through the same owner-key pipeline as everything else.
+
 ## Getting the keys
 
 You need the TLS keys for the traffic you want to read. There are three ways, all under

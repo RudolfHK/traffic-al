@@ -140,6 +140,15 @@
     <string name="audit_no_keys">No TLS keys placed, so encrypted traffic can\'t be read. Add a key log (Settings → TLS decryption) to see inside HTTPS and QUIC.</string>
     <string name="audit_encrypted_note">Encrypted — no keys for this connection (or the app pins its certificate).</string>
     <string name="audit_tracker">Tracker</string>
+    <string name="audit_stats_title">Decryptability</string>
+    <string name="audit_stats_readable_pct">%1$d%% of web traffic readable</string>
+    <string name="audit_stats_bytes">%1$s readable · %2$s undecryptable</string>
+    <string name="audit_stats_apps">%1$d apps fully readable · %2$d opaque (pinned or no keys)</string>
+    <string name="audit_stats_app_row">%1$s — %2$d%% readable, %3$s opaque</string>
+    <string name="audit_mitm_title">MitM via mitmproxy</string>
+    <string name="audit_mitm_hint">Route your apps through mitmproxy to read more. Run mitmproxy on your computer, install its CA (tools/decryption/system-ca.sh), and point its SSLKEYLOGFILE at Traffic AL\'s key-log path (Settings → TLS decryption). Applies when you next start the capture. Pinned apps and QUIC stay opaque.</string>
+    <string name="audit_mitm_host">Proxy host (computer IP)</string>
+    <string name="audit_mitm_port">Port</string>
     <string name="status_recording">Saving to storage: %1$s</string>
     <string name="status_always_on">Running as always-on VPN.</string>
     <string name="export_recording_done">Exported %1$d packets (%2$s)</string>
