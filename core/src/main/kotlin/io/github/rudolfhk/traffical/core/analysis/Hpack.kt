@@ -136,7 +136,12 @@ internal object Hpack {
         for (b in data) {
             cur = (cur shl 8) or (b.toLong() and 0xff)
             bits += 8
-            while (bits >= 5) {
+            // Keep only the unconsumed low bits so cur cannot overflow on long strings.
+            if (bits < 64) cur = cur and ((1L shl bits) - 1)
+            // Decode every complete code now buffered. When the leading bits match no code,
+            // the next symbol is simply longer than what is buffered, so break and read more
+            // input; any bits left once the stream ends are the all-ones EOS padding.
+            while (true) {
                 var matched = false
                 val maxLen = minOf(bits, 30)
                 var len = 5
@@ -144,7 +149,7 @@ internal object Hpack {
                     val code = (cur ushr (bits - len)) and ((1L shl len) - 1)
                     val sym = CODE_TO_SYM[(len.toLong() shl 32) or code]
                     if (sym != null) {
-                        if (sym == 256) return out.toString() // EOS: should not occur mid-string
+                        if (sym == 256) return out.toString() // EOS is not expected mid-string
                         out.append(sym.toChar())
                         bits -= len
                         matched = true
@@ -152,17 +157,9 @@ internal object Hpack {
                     }
                     len++
                 }
-                if (!matched) {
-                    // No code matched the leading bits. If what remains is EOS padding (all
-                    // ones, < 8 bits) we are done; otherwise the input uses a symbol outside
-                    // the covered range, so stop with what we have.
-                    val rem = (cur and ((1L shl bits) - 1))
-                    val allOnes = bits < 8 && rem == (1L shl bits) - 1
-                    if (!allOnes && out.length < MAX_STRING) return out.toString()
-                    bits = 0
-                }
-                if (out.length >= MAX_STRING) return out.toString()
+                if (!matched || out.length >= MAX_STRING) break
             }
+            if (out.length >= MAX_STRING) break
         }
         return out.toString()
     }
