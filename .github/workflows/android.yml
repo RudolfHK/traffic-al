@@ -48,7 +48,10 @@ jobs:
         run: sudo WORK="$RUNNER_TEMP/hosttest" PYTHON="$RUNNER_TEMP/venv/bin/python" tools/host-test/run.sh
 
       - name: Flows match tshark conversations, nDPI classification
-        run: tools/host-test/validate.sh "$RUNNER_TEMP/hosttest" "$RUNNER_TEMP/flow-report"
+        # The output dir goes under /tmp, not $RUNNER_TEMP: the runner image's enforcing
+        # AppArmor profile for tshark only lets it read capture files the user owns under
+        # /tmp (reads under the runner home fail with EACCES).
+        run: tools/host-test/validate.sh "$RUNNER_TEMP/hosttest" "/tmp/traffic-al-flow-report"
 
       # docs/PERFORMANCE.md: the numbers are uploaded; the checks are about correctness
       # (connections survive), since the speed of shared runners varies.

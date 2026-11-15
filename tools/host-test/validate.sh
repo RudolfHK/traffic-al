@@ -11,20 +11,14 @@ WORK=$1
 OUT=${2:-$WORK}
 mkdir -p "$OUT"
 
-# tshark reads capture files through a privilege-dropped reader, so it must be able to both
-# read the file and traverse every directory down to it. The Gradle daemon writes the outputs
-# under the runner home with a umask/permissions that block that on the current CI image, so
-# make the files world-readable and every ancestor directory world-traversable before a read.
-readable() {
-  chmod -R a+rX "$OUT" 2>/dev/null || true
-  local d="$OUT"
-  while [ -n "$d" ] && [ "$d" != "/" ]; do chmod a+x "$d" 2>/dev/null || true; d=$(dirname "$d"); done
-}
+# tshark runs under an enforcing AppArmor profile on the CI image that only lets it read
+# capture files the owner keeps under /tmp (reads under the runner home fail with EACCES).
+# The caller passes an output dir under /tmp; keep the files owner-readable for that rule.
+readable() { chmod -R u+rX "$OUT" 2>/dev/null || true; }
 
 "$HERE/../../gradlew" -q -p "$HERE/../../core" captureReport \
   --args="$WORK/batches.bin $OUT/capture.pcapng $OUT/flows.json"
 readable
-{ echo "== host-test diag"; id; tshark --version | head -1; namei -om "$OUT/capture.pcapng"; } || true
 python3 "$HERE/validate_flows.py" "$OUT/capture.pcapng" "$OUT/flows.json"
 
 "$HERE/../../gradlew" -q -p "$HERE/../../core" exportCheck --args="$WORK/batches.bin $OUT"
